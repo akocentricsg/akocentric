@@ -453,6 +453,7 @@ function migrate(o){
 /* ---------- lookups ---------- */
 const trainerById=id=>state.trainers.find(t=>t.id===id);
 const trainerName=id=>trainerById(id)?.name||'Unassigned';
+const rateOf=id=>{const t=trainerById(id);const r=t&&t.rate!=null&&t.rate!==''?+t.rate:+state.rate;return isFinite(r)?r:10};
 const studentById=id=>state.students.find(s=>s.id===id);
 const leadById=id=>state.leads.find(l=>l.id===id);
 const stName=st=>`${st.firstName} ${st.lastName}`.trim();
@@ -588,7 +589,7 @@ function trainerSlots(){
     const sl=m.get(key);sl.students.push(sessName(x)+(x.kind==='trial'?' (trial)':''));});
   return [...m.values()].map(sl=>{const meta=state.slotMeta[sl.key]||{};const past=sl.date<TODAY;
     const status=meta.status||(past?'Present':'Upcoming');const hours=(toMin(sl.end)-toMin(sl.start))/60;
-    const due=status==='Present'?hours*state.rate:0;return {...sl,hours,status,due,paid:status==='Present'&&!!meta.paid}}).sort((a,b)=>a.date===b.date?(a.start<b.start?-1:1):(a.date<b.date?-1:1));
+    const rate=meta.paid?(meta.rate!=null?+meta.rate:+state.rate):rateOf(sl.trainerId);const due=status==='Present'?hours*rate:0;return {...sl,hours,status,rate,due,paid:status==='Present'&&!!meta.paid}}).sort((a,b)=>a.date===b.date?(a.start<b.start?-1:1):(a.date<b.date?-1:1));
 }
 function certRows(){
   return state.students.map(st=>{const list=state.sessions.filter(x=>x.studentId===st.id&&live(x)).sort((a,b)=>a.date<b.date?-1:1);if(!list.length)return null;
@@ -785,7 +786,7 @@ function vOverview(){
     <div class="stat"><span class="l">Students enrolled</span><span class="v">${state.students.length}</span><span class="mini">${state.students.filter(s=>s.scheduleType==='Weekly Courses').length} on weekly courses</span></div>
     <div class="stat"><span class="l">Attendance not marked</span><span class="v">${um.length}</span><span class="mini">${um.length?`across ${new Set(um.map(x=>x.date)).size} day${new Set(um.map(x=>x.date)).size>1?'s':''} up to today · <a href="#attendance" style="color:inherit">mark now</a>`:'All caught up'}</span></div>
     <div class="stat"><span class="l">Classes in the next 7 days</span><span class="v">${upcoming.length}</span><span class="mini">${upcoming.reduce((a,s)=>a+s.students.length,0)} student seats</span></div>
-    <div class="stat"><span class="l">Owed to trainers</span><span class="v">${money(owed)}</span><span class="mini">at ${money(state.rate)}/hour, no GST</span></div>
+    <div class="stat"><span class="l">Owed to trainers</span><span class="v">${money(owed)}</span><span class="mini">at each trainer's hourly rate, no GST</span></div>
   </div>
   <div class="grid2">
     <div class="card"><h2>Needs attention</h2>${items.length?`<ul class="todo">${items.join('')}</ul>`:'<p class="muted">You are all caught up.</p>'}</div>
@@ -844,19 +845,19 @@ function vTrainers(){
   const tot=stats.reduce((a,s)=>({h:a.h+s.hours,o:a.o+s.owed,p:a.p+s.paid}),{h:0,o:0,p:0});
   const f=ui.trainerFilter,m=ui.trainerMonth;
   const shown=slots.filter(s=>(f==='all'||s.trainerId===f)&&(m==='all'||monthKey(s.date)===m));
-  const rows=shown.map(s=>`<tr class="${s.status==='Upcoming'?'':'past'}"><td><b>${esc(trainerName(s.trainerId))}</b></td><td>${fmtDw(s.date)}</td><td>${esc(s.location)}</td><td>${esc(s.room)}</td><td>${esc(s.students.join(', '))}</td><td>${slotStr(s.start,s.end)}</td><td class="num">${s.hours}</td>
+  const rows=shown.map(s=>`<tr class="${s.status==='Upcoming'?'':'past'}"><td><b>${esc(trainerName(s.trainerId))}</b></td><td>${fmtDw(s.date)}</td><td>${esc(s.location)}</td><td>${esc(s.room)}</td><td>${esc(s.students.join(', '))}</td><td>${slotStr(s.start,s.end)}</td><td class="num">${s.hours}</td><td class="num">${money(s.rate)}</td>
     <td>${s.status==='Upcoming'?chip('Upcoming'):`<select data-chg="slot-status" data-key="${esc(s.key)}" aria-label="Attendance">${['Present','Absent'].map(o=>opt(o,s.status)).join('')}</select>`}</td>
     <td class="num">${s.status==='Upcoming'?'—':money(s.due)}</td>
     <td>${s.status==='Present'?`<select data-chg="slot-pay" data-key="${esc(s.key)}" aria-label="Payment status">${opt('due',s.paid?'paid':'due','Payment Due')}${opt('paid',s.paid?'paid':'due','Paid')}</select>`:'<span class="muted">—</span>'}</td></tr>`);
-  return header('Module 2','Trainer Hours',`Trainers are paid ${money(state.rate)} an hour, no GST. Hours count once per class taught, however many students attend.`,`<button class="btn" data-act="export-trainers">Export report to Excel</button>`)+
+  return header('Module 2','Trainer Hours',`Each trainer is paid their own hourly rate, set in the Trainers list (no GST). Hours count once per class taught, however many students attend.`,`<button class="btn" data-act="export-trainers">Export report to Excel</button>`)+
   `<div class="stats"><div class="stat"><span class="l">Hours clocked</span><span class="v">${tot.h}</span></div><div class="stat"><span class="l">Payment due</span><span class="v">${money(tot.o)}</span></div><div class="stat"><span class="l">Paid to date</span><span class="v">${money(tot.p)}</span></div><div class="stat"><span class="l">Most hours</span><span class="v" style="font-size:20px">${top?esc(top.t.name):'—'}</span><span class="mini">${top?top.hours+' hours':''}</span></div></div>
   <div class="grid2">
     <div class="card"><h2>Hours by trainer</h2><div class="bars">${stats.map(s=>`<div class="barrow"><span>${esc(s.t.name)}${s.t.active?'':' <span class="mini">(removed)</span>'}</span><div class="track" role="img" aria-label="${s.hours} hours"><div class="fill${s===top?' top':''}" style="width:${s.hours/maxH*100}%"></div></div><span class="amt">${s.hours} h · ${money(s.owed)} due</span></div>`).join('')}</div></div>
-    <div class="card"><h2>Trainers</h2><div class="list">${state.trainers.map(t=>`<div class="it"><div><b>${esc(t.name)}</b> ${t.active?'':chip('Removed')}<span class="small mini">${esc(t.phone)} · ${esc(t.email)}</span></div>${t.active?`<button class="btn sm ghost danger" data-act="trainer-remove" data-id="${t.id}">Remove</button>`:`<button class="btn sm ghost" data-act="trainer-restore" data-id="${t.id}">Restore</button>`}</div>`).join('')}</div>
-      <form data-form="trainer" class="form"><div class="field"><label for="tr-name">Name *</label><input type="text" id="tr-name" name="name" maxlength="100" required></div><div class="field"><label for="tr-phone">Phone</label><input type="text" id="tr-phone" name="phone" maxlength="100"></div><div class="field"><label for="tr-email">Email</label><input type="text" id="tr-email" name="email" maxlength="100"></div><div class="field" style="justify-content:flex-end"><button class="btn primary">Add trainer</button></div></form></div>
+    <div class="card"><h2>Trainers</h2><div class="list">${state.trainers.map(t=>`<div class="it"><div><b>${esc(t.name)}</b> ${t.active?'':chip('Removed')}<span class="small mini">${[t.phone,t.email].filter(Boolean).map(esc).join(' · ')}</span></div><div class="row right" style="flex-wrap:nowrap"><span class="chip info">${money(rateOf(t.id))}/hr</span><button class="btn sm ghost" data-act="trainer-edit" data-id="${t.id}">Edit</button>${t.active?`<button class="btn sm ghost danger" data-act="trainer-remove" data-id="${t.id}">Remove</button>`:`<button class="btn sm ghost" data-act="trainer-restore" data-id="${t.id}">Restore</button>`}</div></div>`).join('')}</div>
+      <form data-form="trainer" class="form"><div class="field"><label for="tr-name">Name *</label><input type="text" id="tr-name" name="name" maxlength="100" required></div><div class="field"><label for="tr-phone">Phone</label><input type="text" id="tr-phone" name="phone" maxlength="100"></div><div class="field"><label for="tr-email">Email</label><input type="text" id="tr-email" name="email" maxlength="100"></div><div class="field"><label for="tr-rate">Pay per hour (S$) *</label><input type="number" id="tr-rate" name="rate" min="0" max="1000" step="0.5" value="${esc(state.rate)}" required><span class="hint">No GST. Change it later with Edit.</span></div><div class="full"><button class="btn primary">Add trainer</button></div></form></div>
   </div>
   <div class="card"><div class="row"><h2>Hours & payment report</h2><div class="row right"><label class="lbl" for="tf">Trainer</label><select id="tf" data-chg="trainer-filter" style="width:auto">${opt('all',f,'All trainers')}${state.trainers.map(t=>opt(t.id,f,t.name)).join('')}</select><label class="lbl" for="tm">Month</label><select id="tm" data-chg="trainer-month" style="width:auto">${opt('all',m,'All months')}${months.map(k=>opt(k,m,monthLabel(k))).join('')}</select></div></div>
-  ${table(['Trainer','Date','Location','Classroom','Students','Time slot',['Hours','num'],'Status',['Payment due','num'],'Payment status'],rows,'No classes for this selection.')}</div>`;
+  ${table(['Trainer','Date','Location','Classroom','Students','Time slot',['Hours','num'],['Rate / hr','num'],'Status',['Payment due','num'],'Payment status'],rows,'No classes for this selection.')}</div>`;
 }
 
 /* Certificates */
@@ -1389,8 +1390,14 @@ const ACT={
     const b2b=state.leads.filter(l=>l.type==='B2B').map(l=>({'Partnership Name':l.partnershipName,'Phone Number':l.phone,'Email':l.email,'How did you hear about us?':l.heardFrom,'Interested in':l.interestedIn,'Specific Interest':l.specificInterest,'Location Preference':l.location,'Follow Up Date':l.followUpDate,'Comments':l.comments,'Registered':l.createdAt,'Status':l.status}));
     exportXlsx(`ako-leads-${TODAY}.xlsx`,[['B2C leads',b2c],['B2B leads',b2b]])},
   'trainer-remove':d=>{const t=trainerById(d.id);confirmBox(`Remove ${t.name}?`,'Their past hours stay in the report. Regenerate schedules to reassign their upcoming classes.','Remove',()=>{t.active=false;commit(`${t.name} removed`)})},
+  'trainer-edit':d=>{const t=trainerById(d.id);openModal(`<h2>Edit ${esc(t.name)}</h2><form data-form="traineredit" data-id="${t.id}" class="form">
+    <div class="field"><label for="te-name">Name *</label><input type="text" id="te-name" name="name" maxlength="100" required value="${esc(t.name)}"></div>
+    <div class="field"><label for="te-rate">Pay per hour (S$) *</label><input type="number" id="te-rate" name="rate" min="0" max="1000" step="0.5" required value="${esc(rateOf(t.id))}"><span class="hint">No GST. Applies to all classes not yet marked paid.</span></div>
+    <div class="field"><label for="te-phone">Phone</label><input type="text" id="te-phone" name="phone" maxlength="100" value="${esc(t.phone||'')}"></div>
+    <div class="field"><label for="te-email">Email</label><input type="text" id="te-email" name="email" maxlength="100" value="${esc(t.email||'')}"></div>
+    <div class="full foot"><button type="button" class="btn" data-act="modal-close">Cancel</button><button class="btn primary">Save</button></div></form>`)},
   'trainer-restore':d=>{trainerById(d.id).active=true;commit('Trainer restored')},
-  'export-trainers':()=>{const rows=trainerSlots().filter(s=>(ui.trainerFilter==='all'||s.trainerId===ui.trainerFilter)&&(ui.trainerMonth==='all'||monthKey(s.date)===ui.trainerMonth)).map(s=>({'Trainer Name':trainerName(s.trainerId),'Date of course taken':s.date,'Location':s.location,'Classroom used':s.room,'Students':s.students.join(', '),'Time slot':slotStr(s.start,s.end),'No. of hours':s.hours,'Status':s.status,'Payment Due ($)':s.due,'Payment Status':s.status==='Present'?(s.paid?'Paid':'Payment Due'):''}));
+  'export-trainers':()=>{const rows=trainerSlots().filter(s=>(ui.trainerFilter==='all'||s.trainerId===ui.trainerFilter)&&(ui.trainerMonth==='all'||monthKey(s.date)===ui.trainerMonth)).map(s=>({'Trainer Name':trainerName(s.trainerId),'Date of course taken':s.date,'Location':s.location,'Classroom used':s.room,'Students':s.students.join(', '),'Time slot':slotStr(s.start,s.end),'No. of hours':s.hours,'Rate per hour ($)':s.rate,'Status':s.status,'Payment Due ($)':s.due,'Payment Status':s.status==='Present'?(s.paid?'Paid':'Payment Due'):''}));
     const sum=state.trainers.map(t=>{const m=trainerSlots().filter(s=>s.trainerId===t.id&&s.status==='Present');return {'Trainer':t.name,'Hours':m.reduce((a,s)=>a+s.hours,0),'Owed ($)':m.filter(s=>!s.paid).reduce((a,s)=>a+s.due,0),'Paid ($)':m.filter(s=>s.paid).reduce((a,s)=>a+s.due,0)}});
     exportXlsx(`ako-trainer-hours-${TODAY}.xlsx`,[['Report',rows],['Summary',sum]])},
   'cert-print':d=>{(state.certs[d.id]??={}).issueDate=TODAY;commit('Marked as printed')},
@@ -1475,7 +1482,7 @@ const CHG={
   'att-date':el=>{if(el.value){ui.attDate=el.value;render()}},
   'att-trainer':el=>{const c=classCards(el.dataset.date).find(x=>x.k===el.dataset.k);if(!c)return;c.list.forEach(x=>x.override=el.value===x.trainerId?'':el.value);commit(`${trainerName(el.value)} takes this class`)},
   'slot-status':(el)=>{(state.slotMeta[el.dataset.key]??={}).status=el.value;commit()},
-  'slot-pay':(el)=>{(state.slotMeta[el.dataset.key]??={}).paid=el.value==='paid';commit(el.value==='paid'?'Marked paid':'Marked as payment due')},
+  'slot-pay':(el)=>{const m=(state.slotMeta[el.dataset.key]??={});m.paid=el.value==='paid';if(m.paid)m.rate=rateOf(el.dataset.key.split('|')[4]);else delete m.rate;commit(el.value==='paid'?'Marked paid':'Marked as payment due')},
   'trainer-filter':el=>{ui.trainerFilter=el.value;render()},
   'trainer-month':el=>{ui.trainerMonth=el.value;render()},
   'cert-month':el=>{ui.certMonth=el.value;render()},
@@ -1558,7 +1565,12 @@ const FORMS={
     fields.forEach(([k])=>l[k]=(fd.get(k)||'').trim());l.status=fd.get('status');
     if(!id)state.leads.push(l);if(type==='B2C')generateTrial(l);closeModal();
     ui.leadTab=type;commit(id?'Lead updated':`Lead added. First reminder ${fmtD(leadNext(l))}`)},
-  trainer:(f,fd)=>{state.trainers.push({id:uid(),name:fd.get('name').trim(),phone:fd.get('phone').trim(),email:fd.get('email').trim(),active:true,joined:TODAY});commit('Trainer added')},
+  trainer:(f,fd)=>{const rate=parseFloat(fd.get('rate'));if(!(rate>=0)){toast('Enter the pay per hour.');return}
+    state.trainers.push({id:uid(),name:fd.get('name').trim(),phone:fd.get('phone').trim(),email:fd.get('email').trim(),rate,active:true,joined:TODAY});commit(`Trainer added at ${money(rate)} an hour`)},
+  traineredit:(f,fd)=>{const t=trainerById(f.dataset.id);const rate=parseFloat(fd.get('rate'));const name=fd.get('name').trim();
+    if(!name){toast('Add a name.');return}if(!(rate>=0)){toast('Enter the pay per hour.');return}
+    const changed=rate!==rateOf(t.id);Object.assign(t,{name,phone:fd.get('phone').trim(),email:fd.get('email').trim(),rate});closeModal();
+    commit(changed?`${name} now paid ${money(rate)} an hour. Classes already marked paid keep their old rate.`:'Trainer saved')},
   topic:(f,fd)=>{const t=fd.get('topic').trim();if(state.topics.some(x=>norm(x)===norm(t))){toast(`${t} already exists.`);return}state.topics.push(t);commit('Topic added')},
   room:(f,fd)=>{const r=fd.get('room').trim();if(state.classrooms.some(x=>norm(x)===norm(r))){toast(`${r} already exists.`);return}state.classrooms.push(r);commit('Classroom added')},
   loc:(f,fd)=>{const v=fd.get('v').trim();if(norm(v)==='ad-hoc'){toast('Ad-hoc is always offered already.');return}if(state.locations.some(x=>norm(x)===norm(v))){toast(`${v} already exists.`);return}state.locations.push(v);commit(`${v} added to locations`)},
