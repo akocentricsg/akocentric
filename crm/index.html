@@ -344,7 +344,7 @@ const ui={view:'overview',leadTab:'B2C',enrollDraft:null,schedStudent:null,sched
 const blobs={}; // uploaded lesson-plan files kept in memory for this visit
 /* ---- Supabase sync: each record (lead, student, class...) is one row in ako_records ---- */
 const ARR_COLS=['leads','students','sessions','trainers','holidays','curriculum','curCats'];
-const MAP_COLS=['slotMeta','certs','invoicePaid','classNotes'];
+const MAP_COLS=['slotMeta','certs','invoicePaid','classNotes','invoiceAdj'];
 const ORDERED=new Set(['trainers','students','curriculum','curCats']);
 const NOSYNC=new Set(['version','users']);
 const TRAINER_COLS=new Set(['sessions','slotMeta','classNotes','curriculum','students']);
@@ -390,7 +390,7 @@ async function loadState(){
 }
 function seedClean(){
   state={version:1,rate:10,classrooms:['Chope Cube','Lepak Lounge','Shiouk Space','Zen Zone'],locations:[...DEFAULT_LOCATIONS],courses:copyCourses(),
-    holidays:PH.map(([date,name])=>({id:uid(),date,name,kind:'public'})),trainers:[],leads:[],students:[],sessions:[],slotMeta:{},certs:{},invoicePaid:{},classNotes:{},topics:[],topicDays:{},files:[]};
+    holidays:PH.map(([date,name])=>({id:uid(),date,name,kind:'public'})),trainers:[],leads:[],students:[],sessions:[],slotMeta:{},certs:{},invoicePaid:{},classNotes:{},invoiceAdj:{},topics:[],topicDays:{},files:[]};
   state.curriculum=defaultCurriculum(state.courses).filter(p=>!p.sample);restructureCats(state);
 }
 function applyRemote(p){
@@ -445,6 +445,7 @@ function migrate(o){
   else if(!o.courses||!o.courses.weekly)o.courses=copyCourses();
   if(!o.users)o.users=JSON.parse(JSON.stringify(DEFAULT_USERS));
   if(!o.classNotes)o.classNotes={};
+  if(!o.invoiceAdj)o.invoiceAdj={};
   if(!o.curriculum)o.curriculum=defaultCurriculum(o.courses);
   if(!o.curCats)restructureCats(o);
   (o.students||[]).forEach(st=>{if(!st.code){let c;do{c=String(1000+Math.floor(Math.random()*9000))}while(o.students.some(x=>x.code===c));st.code=c}});
@@ -599,18 +600,43 @@ function certRows(){
     const status=c.issueDate?'Printed':(TODAY>=addDays(end,-10)?'Due':'Upcoming');
     return {st,start,end,trainer,printName:c.printName??stName(st),issueDate:c.issueDate||'',status}}).filter(Boolean);
 }
+const FEE_CLASS=FEE_MONTH/4; // $200 a month covers 4 classes
+// One invoice per calendar month the student has regular classes in. Each regular class is billed once,
+// even if the student is absent; classes the centre cancels are not billed; make-up classes are free.
+// The centre can key in a different amount for any month (e.g. extra classes added to make up a short month).
 function invoicesFor(st){
   if(st.scheduleType!=='Weekly Courses'||!st.startDate)return [];
-  const sd=pd(st.startDate),y=sd.getFullYear(),m=sd.getMonth()+1,day=sd.getDate(),dim=daysInMonth(y,m);
-  const total=FEE_MONTH*INSTALMENTS;
-  const first=day===1?FEE_MONTH:round2(FEE_MONTH*(dim-day+1)/dim);
-  const restEach=round2((total-first)/(INSTALMENTS-1));
-  const amts=[first,restEach,round2(total-first-restEach)];
-  return amts.map((amt,i)=>{const dt=new Date(y,m-1+i,25);let issue=isoOf(dt);if(i===0&&st.startDate>issue)issue=st.startDate;
-    const id=`${st.id}-${i+1}`;const paid=state.invoicePaid[id];
+  const mine=state.sessions.filter(x=>x.studentId===st.id);
+  const regs=mine.filter(x=>x.kind==='weekly'&&x.key[0]==='R'&&x.status!=='Cancelled').sort((a,b)=>a.date<b.date?-1:1);
+  const byM={};regs.forEach(x=>(byM[monthKey(x.date)]??=[]).push(x));
+  const adjAll=state.invoiceAdj||{};
+  const months=[...new Set([...Object.keys(byM),...Object.keys(adjAll).filter(k=>k.startsWith(st.id+'|')).map(k=>k.split('|')[1])])].sort();
+  const user6=(st.username||st.firstName||'').replace(/[^A-Za-z0-9]/g,'').slice(0,6).toUpperCase();
+  return months.map((mk,i)=>{
+    const list=byM[mk]||[];const n=list.length;const auto=round2(n*FEE_CLASS);
+    const adj=adjAll[`${st.id}|${mk}`]||{};
+    const manual=adj.amount!=null&&adj.amount!==''&&isFinite(+adj.amount);
+    const amount=manual?round2(+adj.amount):auto;
+    const [y,m]=mk.split('-').map(Number);
+    let issue=`${mk}-25`;if(i===0&&st.startDate>issue&&monthKey(st.startDate)===mk)issue=st.startDate;
+    const id=`${st.id}-${mk.replace('-','')}`;const paid=state.invoicePaid[id];
     const status=issue>TODAY?'Scheduled':paid?'Paid':'Unpaid';
-    return {id,no:`AKO-${issue.slice(0,4)}${issue.slice(5,7)}-${st.username.replace(/[^A-Za-z0-9]/g,'').slice(0,6).toUpperCase()}${i+1}`,st,inst:i+1,amount:amt,issue,due:addDays(issue,7),status,paid,
-      prorated:i===0&&day!==1,proNote:i===0&&day!==1?`Pro-rated: ${dim-day+1} of ${dim} days in ${MON[m-1]} (from ${fmtD(st.startDate)})`:''}});
+    const makeups=+adj.makeups||0;
+    const detail=n?`${MONTHS[m-1]} ${y}: ${n} class${n===1?'':'es'} × ${money(FEE_CLASS)} (${list.map(x=>pd(x.date).getDate()).join(', ')} ${MON[m-1]})`:`${MONTHS[m-1]} ${y}`;
+    const adjNote=[manual?`Amount set by centre: ${money(amount)}`:'',makeups?`${makeups} make-up class${makeups>1?'es':''} done`:'',adj.note||''].filter(Boolean).join(' · ');
+    return {id,no:`AKO-${mk.replace('-','')}-${user6}${i+1}`,st,inst:i+1,month:mk,classes:n,auto,manual,makeups,amount,issue,due:addDays(issue,7),status,paid,detail,adjNote,prorated:false,proNote:''};
+  }).filter(i=>i.classes||i.manual);
+}
+function openInvAdjust(stId){
+  const st=studentById(stId);if(!st)return;const invs=invoicesFor(st);
+  openModal(`<h2>Invoices for ${esc(stName(st))}</h2><p class="muted" style="margin:0">Each month is billed at ${money(FEE_CLASS)} per class (${money(FEE_MONTH)} for 4). To invoice a different amount, for example after adding extra classes to make up a short month, type it in. Leave it blank to use the automatic amount.</p>
+  ${invs.length?`<form data-form="invadj" data-id="${st.id}" style="display:flex;flex-direction:column;gap:14px"><div class="tbl"><table><thead><tr><th>Month</th><th class="num">Classes</th><th class="num">Automatic</th><th>Amount to invoice (S$)</th><th>Make-up classes done</th><th>Note</th></tr></thead><tbody>
+  ${invs.map(i=>{const a=state.invoiceAdj[`${st.id}|${i.month}`]||{};return `<tr><td><b>${monthLabel(i.month)}</b><span class="small">${i.status}</span></td><td class="num">${i.classes}</td><td class="num">${money(i.auto)}</td>
+    <td><input type="number" name="amt|${i.month}" min="0" max="10000" step="0.01" placeholder="${i.auto.toFixed(2)}" value="${esc(a.amount??'')}" aria-label="Amount to invoice for ${monthLabel(i.month)}" style="width:110px"></td>
+    <td><input type="number" name="mk|${i.month}" min="0" max="20" step="1" value="${esc(a.makeups||'')}" aria-label="Make-up classes done in ${monthLabel(i.month)}" style="width:80px"></td>
+    <td><input type="text" name="note|${i.month}" maxlength="200" value="${esc(a.note||'')}" placeholder="e.g. extra class on 27 Dec" aria-label="Note for ${monthLabel(i.month)}"></td></tr>`}).join('')}
+  </tbody></table></div><p class="mini" style="margin:0">Make-up and extra classes are booked in Attendance or the Schedule Generator; this only records them on the invoice.</p>
+  <div class="foot"><button type="button" class="btn" data-act="modal-close">Cancel</button><button class="btn primary">Save invoice amounts</button></div></form>`:'<p class="muted">No classes are scheduled yet, so there is nothing to invoice.</p><div class="foot"><button type="button" class="btn" data-act="modal-close">Close</button></div>'}`);
 }
 const allInvoices=()=>state.students.flatMap(invoicesFor);
 function next25(){const d=pd(TODAY);let t=new Date(d.getFullYear(),d.getMonth(),25);if(d>t)t=new Date(d.getFullYear(),d.getMonth()+1,25);return isoOf(t)}
@@ -637,7 +663,7 @@ function slotWarning(day,time,dur){if(!time)return '';const s=toMin(time),e=s+(d
 /* ---------- sample data ---------- */
 function seed(){
   const D=n=>addDays(TODAY,n);
-  state={version:1,rate:10,classrooms:['Chope Cube','Lepak Lounge','Shiouk Space','Zen Zone'],locations:[...DEFAULT_LOCATIONS],courses:copyCourses(),users:JSON.parse(JSON.stringify(DEFAULT_USERS)),classNotes:{},
+  state={version:1,rate:10,classrooms:['Chope Cube','Lepak Lounge','Shiouk Space','Zen Zone'],locations:[...DEFAULT_LOCATIONS],courses:copyCourses(),users:JSON.parse(JSON.stringify(DEFAULT_USERS)),classNotes:{},invoiceAdj:{},
     holidays:[...PH.map(([date,name])=>({id:uid(),date,name,kind:'public'})),
       {id:uid(),date:'2026-11-21',end:'2026-12-31',name:'Year-end school holidays',kind:'school'},
       {id:uid(),date:D(17),name:'Centre maintenance day',kind:'adhoc'}],
@@ -1049,7 +1075,7 @@ function vEnroll(){
     <div class="full row"><button class="btn primary">${d.editingId?'Save and regenerate schedule':'Enroll and generate schedule'}</button>${d.editingId||d.firstName||d.conv==='Yes'?'<button type="button" class="btn ghost" data-act="enroll-reset">Clear form</button>':''}</div>
   </form></div>`;
   const rows=state.students.map(st=>`<tr><td><b>${esc(stName(st))}</b><span class="small">Parent: ${esc(st.parentName)}${st.leadId?' · from lead':''} · Attendance code <span class="mono">${esc(st.code||'—')}</span></span></td><td>${esc(st.course)}<span class="small">${esc(st.scheduleType)}${st.scheduleType==='Weekly Courses'?` · ${st.sessions} sessions`:''}</span></td><td>${esc(locOf(st))}</td><td>${fmtD(st.startDate)}</td><td>${slotSummary(st)}${hasCustomSlot(st)?' '+chip('Custom','info'):''}</td><td class="mono">${esc(st.username)}</td><td class="mono">${esc(st.password)}</td>
-    <td><div class="row" style="flex-wrap:nowrap"><button class="btn sm" data-act="st-schedule" data-id="${st.id}">Schedule</button><button class="btn sm ghost" data-act="st-edit" data-id="${st.id}">Edit</button><button class="btn sm ghost danger" data-act="st-del" data-id="${st.id}">Remove</button></div></td></tr>`);
+    <td><div class="row" style="flex-wrap:nowrap"><button class="btn sm" data-act="st-schedule" data-id="${st.id}">Schedule</button>${st.scheduleType==='Weekly Courses'?`<button class="btn sm ghost" data-act="inv-adjust" data-st="${st.id}">Invoices</button>`:''}<button class="btn sm ghost" data-act="st-edit" data-id="${st.id}">Edit</button><button class="btn sm ghost danger" data-act="st-del" data-id="${st.id}">Remove</button></div></td></tr>`);
   return header('Module 5','Student Enrollment','Formally add a student. Saving creates their Resolute login and generates their class schedule.')+form+
   `<div class="card"><h2>Enrolled students</h2>${table(['Student','Course','Location','Start date','Time slot','Username','Password',''],rows,'No students yet.')}</div>`;
 }
@@ -1099,20 +1125,20 @@ function vInvoices(){
   if(!ui.invMonth)ui.invMonth=next25().slice(0,7);if(!months.includes(ui.invMonth))months.push(ui.invMonth),months.sort();
   const shown=all.filter(i=>i.issue.slice(0,7)===ui.invMonth).sort((a,b)=>a.issue<b.issue?-1:1);
   const sum=shown.reduce((a,i)=>a+i.amount,0),unpaid=all.filter(i=>i.status==='Unpaid');
-  const rows=shown.map(i=>`<tr><td class="mono">${esc(i.no)}</td><td><b>${esc(i.st.parentName)}</b><span class="small">${esc(i.st.email)}</span></td><td>${esc(stName(i.st))}<span class="small">${esc(i.st.course)}</span></td><td>${i.inst} of ${INSTALMENTS}${i.prorated?`<span class="small">${esc(i.proNote)}</span>`:''}</td><td>${fmtD(i.issue)}</td><td class="num"><b>${money(i.amount)}</b></td>
+  const rows=shown.map(i=>`<tr><td class="mono">${esc(i.no)}</td><td><b>${esc(i.st.parentName)}</b><span class="small">${esc(i.st.email)}</span></td><td>${esc(stName(i.st))}<span class="small">${esc(i.st.course)}</span></td><td>${monthLabel(i.month)}<span class="small">${i.classes} class${i.classes===1?'':'es'}${i.manual?' · amount set by centre':''}${i.makeups?` · ${i.makeups} make-up`:''}</span></td><td>${fmtD(i.issue)}</td><td class="num"><b>${money(i.amount)}</b></td>
     <td>${i.status==='Paid'?chip('Paid','good'):i.status==='Unpaid'?chip('Unpaid','warn'):chip('Scheduled')}</td>
-    <td><div class="row" style="flex-wrap:nowrap"><button class="btn sm" data-act="inv-view" data-id="${i.id}">View</button>${i.status==='Unpaid'?`<button class="btn sm ghost" data-act="inv-paid" data-id="${i.id}">Mark paid</button>`:''}</div></td></tr>`);
-  return header('Module 7','Invoices',`Weekly courses are billed ${money(FEE_MONTH)} a month over ${INSTALMENTS} instalments, issued on the 25th. A mid-month start pro-rates the first invoice and spreads the balance over the other two.`)+
+    <td><div class="row" style="flex-wrap:nowrap"><button class="btn sm" data-act="inv-view" data-id="${i.id}">View</button><button class="btn sm ghost" data-act="inv-adjust" data-st="${i.st.id}">Adjust</button>${i.status==='Unpaid'?`<button class="btn sm ghost" data-act="inv-paid" data-id="${i.id}">Mark paid</button>`:''}</div></td></tr>`);
+  return header('Module 7','Invoices',`Weekly courses are billed ${money(FEE_CLASS)} per class (${money(FEE_MONTH)} for 4 classes), one invoice per month for the classes in that month, issued on the 25th. Use Adjust to set a different amount for a month.`)+
   `<div class="stats"><div class="stat"><span class="l">Billed in ${monthLabel(ui.invMonth)}</span><span class="v">${money(sum)}</span><span class="mini">${shown.length} invoice${shown.length===1?'':'s'}</span></div><div class="stat"><span class="l">Unpaid, all months</span><span class="v">${money(unpaid.reduce((a,i)=>a+i.amount,0))}</span><span class="mini">${unpaid.length} invoice${unpaid.length===1?'':'s'}</span></div><div class="stat"><span class="l">Next issue date</span><span class="v" style="font-size:22px">${fmtD(next25())}</span></div></div>
   <div class="row"><label class="lbl" for="im">Issue month</label><select id="im" data-chg="inv-month" style="width:auto">${months.map(k=>opt(k,ui.invMonth,monthLabel(k))).join('')}</select><span class="mini">Holiday camps and workshops are not billed by this module yet.</span></div>`+
-  table(['Invoice no.','Bill to','Student','Instalment','Issue date',['Amount','num'],'Status',''],rows,'No invoices are issued this month.');
+  table(['Invoice no.','Bill to','Student','Billing month','Issue date',['Amount','num'],'Status',''],rows,'No invoices are issued this month.');
 }
 function invoiceHtml(i){
   return `<div class="invoice">
   <div class="lh"><img class="ako" src="${IMG.ako.src}" alt="Ako Centric, One stop Learning Hub, Singapore"><img class="res" src="${IMG.res.src}" alt="Resolute"></div>
   <div class="lh-co"><b>AkoCentric Pte Ltd</b><span>Blk 743 Jurong West St 73, B1-03, SG 640743</span><span>UEN - 202603183H</span></div>
   <div class="top"><div><div class="lbl">Bill to</div><div><b>${esc(i.st.parentName)}</b></div><div class="mini">${esc(i.st.email)} · ${esc(i.st.phone)}</div></div><div style="text-align:right"><div class="eyebrow">Invoice</div><div class="mono">${esc(i.no)}</div><div class="mini">Issued ${fmtD(i.issue)} · Due ${fmtD(i.due)}</div></div></div>
-  ${table(['Description',['Amount','num']],[`<tr><td>${esc(i.st.course)}, weekly course for ${esc(stName(i.st))}<span class="small">Instalment ${i.inst} of ${INSTALMENTS}${i.prorated?' · '+esc(i.proNote):''}</span></td><td class="num">${money(i.amount)}</td></tr>`,`<tr><td style="text-align:right"><b>Total due</b></td><td class="num"><b>${money(i.amount)}</b></td></tr>`])}
+  ${table(['Description',['Amount','num']],[`<tr><td>${esc(i.st.course)}, weekly course for ${esc(stName(i.st))}<span class="small">${esc(i.detail)}${i.adjNote?'<br>'+esc(i.adjNote):''}</span></td><td class="num">${money(i.amount)}</td></tr>`,`<tr><td style="text-align:right"><b>Total due</b></td><td class="num"><b>${money(i.amount)}</b></td></tr>`])}
   <div class="pay"><img src="${IMG.qr.src}" alt="PayNow QR code for Ako Centric"><div><b>Scan to pay with PayNow</b><span>Amount: <b>${money(i.amount)}</b></span><span class="mini">Please enter <span class="mono">${esc(i.no)}</span> as the payment reference.</span></div></div></div>`;
 }
 
@@ -1337,6 +1363,7 @@ function vAttendance(){
 function commit(msg){save();render();if(msg)toast(msg)}
 function regenFor(st){generateStudent(st);}
 const ACT={
+  'inv-adjust':d=>openInvAdjust(d.st),
   'cur-tab':d=>{ui.cur.tab=d.tab;render()},
   'cur-open':d=>curNav(d.pid,null),
   'cur-back':()=>curNav(null,null),
@@ -1443,7 +1470,7 @@ ${slotStr(s.start,s.end)}`,stName(st),st.course,s.location]));
     doc.setFont('helvetica','normal');doc.setFontSize(10);doc.setTextColor(40,40,40);
     doc.text(i.no,R,y+16,{align:'right'});doc.text(`Issued ${fmtD(i.issue)}`,R,y+30,{align:'right'});doc.text(`Due ${fmtD(i.due)}`,R,y+44,{align:'right'});
     doc.setFont('helvetica','bold');doc.text('Bill to',L,y);doc.setFont('helvetica','normal');doc.text(i.st.parentName,L,y+16);doc.text(i.st.email,L,y+30);doc.text(i.st.phone,L,y+44);
-    pdfTable(doc,y+64,['Description','Amount'],[[`${i.st.course}, weekly course for ${stName(i.st)}\nInstalment ${i.inst} of ${INSTALMENTS}${i.prorated?'\n'+i.proNote:''}`,money(i.amount)],[{content:'Total due',styles:{fontStyle:'bold',halign:'right'}},{content:money(i.amount),styles:{fontStyle:'bold'}}]]);
+    pdfTable(doc,y+64,['Description','Amount'],[[`${i.st.course}, weekly course for ${stName(i.st)}\n${i.detail}${i.adjNote?'\n'+i.adjNote:''}`,money(i.amount)],[{content:'Total due',styles:{fontStyle:'bold',halign:'right'}},{content:money(i.amount),styles:{fontStyle:'bold'}}]]);
     y=doc.lastAutoTable.finalY+24;const q=120;doc.addImage(IMG.qr.src,IMG.qr.fmt,L,y,q,q);
     doc.setFont('helvetica','bold');doc.setFontSize(12);doc.setTextColor(...navy);doc.text('Scan to pay with PayNow',L+q+18,y+30);
     doc.setFont('helvetica','normal');doc.setFontSize(10);doc.setTextColor(40,40,40);doc.text(`Amount: ${money(i.amount)}`,L+q+18,y+48);doc.text(`Payment reference: ${i.no}`,L+q+18,y+63);
@@ -1504,6 +1531,13 @@ const CHG={
     commit(big.length?`${big.join(', ')} ${big.length>1?'are':'is'} over 10 MB and was not added.`:`${added} file${added>1?'s':''} added to ${topic}, day ${day}`)}
 };
 const FORMS={
+  invadj:(f,fd)=>{const id=f.dataset.id;state.invoiceAdj??={};const months=new Set([...fd.keys()].map(k=>k.split('|')[1]));let bad='';
+    months.forEach(mk=>{const amt=(fd.get('amt|'+mk)||'').trim(),mkc=(fd.get('mk|'+mk)||'').trim(),note=(fd.get('note|'+mk)||'').trim();const key=`${id}|${mk}`;
+      if(amt!==''&&!(+amt>=0))bad=monthLabel(mk);
+      if(amt===''&&!+mkc&&!note)delete state.invoiceAdj[key];
+      else state.invoiceAdj[key]={amount:amt===''?null:round2(+amt),makeups:+mkc||0,note}});
+    if(bad){toast(`Check the amount for ${bad}.`);return}
+    closeModal();commit('Invoice amounts saved')},
   curprog:(f,fd)=>{const catId=fd.get('catId')||'';const c=catById(catId);
     const v={type:c?c.type:fd.get('type'),catId,title:fd.get('title').trim(),subtitle:fd.get('subtitle').trim()};if(!v.title){toast('Add a name.');return}
     let p=state.curriculum.find(x=>x.id===f.dataset.id);if(p)Object.assign(p,v);else{p={id:uid(),modules:[],...v};state.curriculum.push(p)}
