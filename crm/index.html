@@ -295,6 +295,10 @@ const isoOf=d=>`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
 const pd=s=>{const[y,m,d]=s.split('-').map(Number);return new Date(y,m-1,d)};
 const addDays=(s,n)=>{const d=pd(s);d.setDate(d.getDate()+n);return isoOf(d)};
 const TODAY=isoOf(new Date());
+let dateT=null;
+// Act on a typed date only after typing pauses, so each digit of the year doesn't redraw the page mid-entry.
+const afterDateTyping=(el,fn)=>{clearTimeout(dateT);if(el.value&&!fullDate(el.value))return;dateT=setTimeout(()=>{const id=el.id;fn();if(id&&document.activeElement===document.body){const n=document.getElementById(id);if(n)n.focus()}},900)};
+const fullDate=v=>/^\d{4}-\d{2}-\d{2}$/.test(v||'')&&v>='2000-01-01'&&v<='2100-12-31';
 const dow=s=>pd(s).getDay();
 const diffDays=(a,b)=>Math.round((pd(b)-pd(a))/864e5);
 const toMin=t=>{const[h,m]=t.split(':').map(Number);return h*60+m};
@@ -1077,7 +1081,7 @@ function vEnroll(){
     <div class="field"><label for="ef-loc">Location preference</label><select id="ef-loc" data-draft="location">${locOptions(d.location).map(o=>opt(o,d.location)).join('')}</select><span class="hint">Manage the list in Settings.</span></div>
     ${d.location==='Ad-hoc'?`<div class="field full"><label for="ef-adhocLocation">Ad-hoc location *</label><input type="text" id="ef-adhocLocation" maxlength="100" value="${esc(d.adhocLocation)}" data-draft="adhocLocation" required></div>`:''}
     ${weekly?`<div class="field"><label for="ef-sessions">Number of sessions</label><input type="number" id="ef-sessions" min="1" max="52" value="${esc(d.sessions)}" data-draft="sessions"></div>`:`<div class="field"><span class="lbl">Length</span><span class="mini" style="padding-top:8px">${d.scheduleType==='Holiday Camp'?'5 weekdays':'1 day'}</span></div>`}<div></div>
-    <div class="field"><label for="ef-start">Start date *</label><input type="date" id="ef-start" value="${esc(d.startDate)}" data-draft="startDate" required>${startHint(d)}</div><div></div>
+    <div class="field"><label for="ef-start">Start date *</label><input type="date" id="ef-start" value="${esc(d.startDate)}" data-draft="startDate" required><span id="ef-hint">${startHint(d)}</span></div><div></div>
     <div class="full" style="border-top:1px solid var(--line);padding-top:12px"><h3>Time slot</h3><p class="mini" style="margin:2px 0 0">Set a day, start time or length for this student, or leave them blank and the scheduler picks the first free slot. You can change this later from the Schedule Generator.</p></div>
     ${slotFields(d,weekly,'draft')}${weekly?'<div></div>':''}
     <div class="field"><label for="ef-user">Resolute username</label><input type="text" id="ef-user" class="mono" value="${esc(d.username)}" readonly><span class="hint">${d.editingId?'Kept when you edit a student.':d.reg==='Existing'?'Same as their earlier enrollment.':'First name_Last name. A number is added if the name is already taken.'}</span></div>
@@ -1534,7 +1538,7 @@ const CHG={
       if(error){failed.push(file.name);continue}recs.push({id,name:file.name,size:file.size,path,at:TODAY,by:me?.name||role})}
     const m=state.curriculum.flatMap(p=>p.modules).find(x=>x.id===mid);if(m)m.files.push(...recs);
     commit([recs.length?`${recs.length} document${recs.length>1?'s':''} added.`:'',big.length?`${big.join(', ')} ${big.length>1?'are':'is'} over 10 MB.`:'',failed.length?`Could not upload ${failed.join(', ')}.`:''].filter(Boolean).join(' '))},
-  'att-date':el=>{if(el.value){ui.attDate=el.value;render()}},
+  'att-date':el=>afterDateTyping(el,()=>{if(fullDate(el.value)){ui.attDate=el.value;render()}}),
   'att-trainer':el=>{const c=classCards(el.dataset.date).find(x=>x.k===el.dataset.k);if(!c)return;c.list.forEach(x=>x.override=el.value===x.trainerId?'':el.value);commit(`${trainerName(el.value)} takes this class`)},
   'slot-status':(el)=>{(state.slotMeta[el.dataset.key]??={}).status=el.value;commit()},
   'slot-pay':(el)=>{const m=(state.slotMeta[el.dataset.key]??={});m.paid=el.value==='paid';if(m.paid)m.rate=rateOf(el.dataset.key.split('|')[4]);else delete m.rate;commit(el.value==='paid'?'Marked paid':'Marked as payment due')},
@@ -1543,7 +1547,7 @@ const CHG={
   'cert-month':el=>{ui.certMonth=el.value;render()},
   'cert-year':el=>{ui.certYear=el.value;render()},
   'cert-name':el=>{(state.certs[el.dataset.id]??={}).printName=el.value;save();toast('Certificate name saved')},
-  'cert-date':el=>{(state.certs[el.dataset.id]??={}).issueDate=el.value;commit()},
+  'cert-date':el=>afterDateTyping(el,()=>{(state.certs[el.dataset.id]??={}).issueDate=el.value;commit()}),
   'inv-month':el=>{ui.invMonth=el.value;render()},
   'sched-student':el=>{ui.schedStudent=el.value;render()},
   'sess-override':el=>{const s=state.sessions.find(x=>x.id===el.dataset.id);s.override=el.value;commit(el.value?`${trainerName(el.value)} takes this class`:'Override cleared')},
@@ -1687,7 +1691,8 @@ document.addEventListener('change',e=>{const el=e.target;
     if(k==='reg'){Object.assign(ui.enrollDraft,{existingUser:'',username:'',password:DEFAULT_PW,conv:'No',leadId:''});render();return}
     if(k==='existingUser'){const p=state.students.filter(s=>s.username===el.value).at(-1);if(p)Object.assign(ui.enrollDraft,{parentName:p.parentName,phone:p.phone,email:p.email,firstName:p.firstName,lastName:p.lastName,age:p.age,location:p.location,adhocLocation:p.adhocLocation||'',username:p.username,password:p.password});render();return}
     if(k==='leadId'){const l=leadById(el.value);if(l){const pw=ui.enrollDraft.password;ui.enrollDraft={...draftFromLead(l),password:pw,editingId:ui.enrollDraft.editingId}}render()}
-    else if(['conv','location','scheduleType','startDate','slotDay'].includes(k)){if(k==='conv'&&el.value==='No')ui.enrollDraft.leadId='';if(k==='scheduleType'&&!state.courses[catKey(el.value)].includes(ui.enrollDraft.course))ui.enrollDraft.course='';render()}}
+    else if(k==='startDate'){const h=$('#ef-hint');if(h)h.innerHTML=startHint(ui.enrollDraft)}
+    else if(['conv','location','scheduleType','slotDay'].includes(k)){if(k==='conv'&&el.value==='No')ui.enrollDraft.leadId='';if(k==='scheduleType'&&!state.courses[catKey(el.value)].includes(ui.enrollDraft.course))ui.enrollDraft.course='';render()}}
 });
 document.addEventListener('input',e=>{const el=e.target;
   if(el.matches('[data-count]')){const c=el.nextElementSibling;if(c?.classList.contains('counter'))c.textContent=`${el.value.length} / ${el.maxLength}`}
@@ -1696,7 +1701,8 @@ document.addEventListener('input',e=>{const el=e.target;
   if(el.id==='cur-search'){ui.cur.q=el.value;const r=$('#cur-list');if(r)r.innerHTML=curList()}
   if(el.id==='att-search'){ui.attQuery=el.value;const r=$('#att-results');if(r)r.innerHTML=attResults()}
 });
-document.addEventListener('submit',e=>{const f=e.target.closest('form[data-form]');if(!f)return;e.preventDefault();FORMS[f.dataset.form]?.(f,new FormData(f))});
+document.addEventListener('submit',e=>{const f=e.target.closest('form[data-form]');if(!f)return;e.preventDefault();
+  const badDate=[...f.querySelectorAll('input[type=date]')].find(i=>i.value&&!fullDate(i.value));if(badDate){toast('Check the year in that date. It should be 4 digits, like 2026.');badDate.focus();return}FORMS[f.dataset.form]?.(f,new FormData(f))});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('#modal').hidden)closeModal()});
 $('#modal').addEventListener('click',e=>{if(e.target.id==='modal')closeModal()});
 window.addEventListener('hashchange',route);
