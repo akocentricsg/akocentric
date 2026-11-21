@@ -484,13 +484,14 @@ function generateStudent(st,oldList){
   st.skipped=[];st.note='';st.pattern=null;
   // Classes already in the past stay exactly as they happened; only today onwards is rebuilt.
   const hasPrior=prior.length>0;
-  const kept=hasPrior?prior.filter(x=>x.date<TODAY&&x.date>=(st.startDate||'')).sort((a,b)=>a.date<b.date?-1:1):[];
+  const recorded=x=>x.status!=='Scheduled'||x.manual||x.makeup||x.makeupRef;
+  const kept=hasPrior?prior.filter(x=>x.date<TODAY&&x.date>=(st.startDate||'')&&recorded(x)).sort((a,b)=>a.date<b.date?-1:1):[];
   const bail=msg=>{st.note=msg;state.sessions.push(...kept,...fixed)};
   const rooms=state.classrooms, loc=locOf(st);
   if(!rooms.length)return bail('Add at least one classroom in Settings before generating schedules.');
   if(!state.trainers.some(t=>t.active))return bail('Add at least one trainer before generating schedules.');
   if(!st.startDate)return bail('Set a start date to generate a schedule.');
-  const from=hasPrior&&st.startDate<TODAY?TODAY:st.startDate;
+  const from=kept.length?addDays(kept[kept.length-1].date,1):st.startDate;
   const kind=st.scheduleType==='Weekly Courses'?'weekly':st.scheduleType==='Holiday Camp'?'camp':'workshop';
   const mk=o=>({id:uid(),studentId:st.id,leadId:null,kind,course:st.course,location:loc,status:'Scheduled',makeup:false,reason:'',override:'',manual:false,conflict:false,...o});
   const applyPrev=s=>{const p=old[s.key];if(!p)return s;s.status=p.status;s.makeup=p.makeup;s.reason=p.reason;s.override=p.override;s.makeupMode=p.makeupMode;s.makeupRef=p.makeupRef;if(p.manual){s.manual=true;s.date=p.date;s.start=p.start;s.end=p.end;s.room=p.room;s.conflict=false}return s};
@@ -1047,6 +1048,15 @@ function slotFields(v,weekly,bind){
   <div class="field"><label for="${p}-time">Start time</label><input type="time" id="${p}-time" step="900" value="${esc(v.slotTime||'')}" ${a('slotTime')}><span class="hint">Leave blank to use the first free slot.</span></div>
   <div class="field"><label for="${p}-dur">Duration in minutes</label><input type="number" id="${p}-dur" min="15" max="480" step="15" placeholder="${defDur}" value="${esc(v.duration||'')}" ${a('duration')}><span class="hint">For example 60, 90 or 120. Blank means ${defDur}.</span></div>`;
 }
+function startHint(d){
+  const day=d.slotDay;
+  if(d.scheduleType==='Weekly Courses'&&d.startDate&&day!==''&&day!=null&&dow(d.startDate)!==+day){
+    let f=d.startDate;while(dow(f)!==+day)f=addDays(f,1);
+    return `<span class="hint" style="color:var(--warn);font-weight:600">${fmtDw(d.startDate)} is a ${DOWL[dow(d.startDate)]}. With ${DOWL[+day]} classes, the first class will be ${fmtDw(f)}.</span>`;
+  }
+  return '<span class="hint">The first class falls on or after this date.</span>';
+}
+const firstClassOf=st=>state.sessions.filter(x=>x.studentId===st.id&&live(x)).map(x=>x.date).sort()[0];
 function vEnroll(){
   const d=ui.enrollDraft||(ui.enrollDraft=blankDraft());
   if(!d.editingId&&d.reg!=='Existing')d.username=makeUsername(d.firstName,d.lastName,'');
@@ -1066,7 +1076,7 @@ function vEnroll(){
     <div class="field"><label for="ef-loc">Location preference</label><select id="ef-loc" data-draft="location">${locOptions(d.location).map(o=>opt(o,d.location)).join('')}</select><span class="hint">Manage the list in Settings.</span></div>
     ${d.location==='Ad-hoc'?`<div class="field full"><label for="ef-adhocLocation">Ad-hoc location *</label><input type="text" id="ef-adhocLocation" maxlength="100" value="${esc(d.adhocLocation)}" data-draft="adhocLocation" required></div>`:''}
     ${weekly?`<div class="field"><label for="ef-sessions">Number of sessions</label><input type="number" id="ef-sessions" min="1" max="52" value="${esc(d.sessions)}" data-draft="sessions"></div>`:`<div class="field"><span class="lbl">Length</span><span class="mini" style="padding-top:8px">${d.scheduleType==='Holiday Camp'?'5 weekdays':'1 day'}</span></div>`}<div></div>
-    <div class="field"><label for="ef-start">Start date *</label><input type="date" id="ef-start" value="${esc(d.startDate)}" data-draft="startDate" required><span class="hint">The first class falls on or after this date.</span></div><div></div>
+    <div class="field"><label for="ef-start">Start date *</label><input type="date" id="ef-start" value="${esc(d.startDate)}" data-draft="startDate" required>${startHint(d)}</div><div></div>
     <div class="full" style="border-top:1px solid var(--line);padding-top:12px"><h3>Time slot</h3><p class="mini" style="margin:2px 0 0">Set a day, start time or length for this student, or leave them blank and the scheduler picks the first free slot. You can change this later from the Schedule Generator.</p></div>
     ${slotFields(d,weekly,'draft')}${weekly?'<div></div>':''}
     <div class="field"><label for="ef-user">Resolute username</label><input type="text" id="ef-user" class="mono" value="${esc(d.username)}" readonly><span class="hint">${d.editingId?'Kept when you edit a student.':d.reg==='Existing'?'Same as their earlier enrollment.':'First name_Last name. A number is added if the name is already taken.'}</span></div>
@@ -1637,7 +1647,7 @@ const FORMS={
     if(!st.code)st.code=newCode();if(!isEdit)state.students.push(st);
     if(st.leadId){const l=leadById(st.leadId);if(l){l.status='Converted';generateTrial(l)}}
     generateStudent(st);ui.enrollDraft=blankDraft();ui.schedStudent=st.id;
-    commit(st.note?`${stName(st)} saved. ${st.note}`:`${stName(st)} ${isEdit?'updated':returning?'enrolled again with the same login':'enrolled'}. Username ${st.username}, schedule ready.`+slotWarning(st.slotDay,st.slotTime,dur||(st.scheduleType==='Weekly Courses'?90:180)))}
+    commit(st.note?`${stName(st)} saved. ${st.note}`:`${stName(st)} ${isEdit?'updated':returning?'enrolled again with the same login':'enrolled'}. Username ${st.username}, schedule ready.${firstClassOf(st)?` First class: ${fmtDw(firstClassOf(st))}.`:''}`+slotWarning(st.slotDay,st.slotTime,dur||(st.scheduleType==='Weekly Courses'?90:180)))}
 };
 
 /* ---------- events ---------- */
@@ -1650,7 +1660,7 @@ document.addEventListener('change',e=>{const el=e.target;
     if(k==='reg'){Object.assign(ui.enrollDraft,{existingUser:'',username:'',password:DEFAULT_PW,conv:'No',leadId:''});render();return}
     if(k==='existingUser'){const p=state.students.filter(s=>s.username===el.value).at(-1);if(p)Object.assign(ui.enrollDraft,{parentName:p.parentName,phone:p.phone,email:p.email,firstName:p.firstName,lastName:p.lastName,age:p.age,location:p.location,adhocLocation:p.adhocLocation||'',username:p.username,password:p.password});render();return}
     if(k==='leadId'){const l=leadById(el.value);if(l){const pw=ui.enrollDraft.password;ui.enrollDraft={...draftFromLead(l),password:pw,editingId:ui.enrollDraft.editingId}}render()}
-    else if(['conv','location','scheduleType'].includes(k)){if(k==='conv'&&el.value==='No')ui.enrollDraft.leadId='';if(k==='scheduleType'&&!state.courses[catKey(el.value)].includes(ui.enrollDraft.course))ui.enrollDraft.course='';render()}}
+    else if(['conv','location','scheduleType','startDate','slotDay'].includes(k)){if(k==='conv'&&el.value==='No')ui.enrollDraft.leadId='';if(k==='scheduleType'&&!state.courses[catKey(el.value)].includes(ui.enrollDraft.course))ui.enrollDraft.course='';render()}}
 });
 document.addEventListener('input',e=>{const el=e.target;
   if(el.matches('[data-count]')){const c=el.nextElementSibling;if(c?.classList.contains('counter'))c.textContent=`${el.value.length} / ${el.maxLength}`}
