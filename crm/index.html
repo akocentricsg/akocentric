@@ -399,7 +399,7 @@ function applyRemote(p){
   const r=p.eventType==='DELETE'?p.old:p.new;if(!r||!r.collection)return;
   const c=r.collection,id=r.id,k=RK(c,id);
   const local=new Map();if(c==='config')colRecords(id,state[id],local);else colRecords(c,state[c],local);
-  if(local.has(k)&&synced.has(k)&&local.get(k)!==synced.get(k))return; // unsaved local edit wins
+  if(p.eventType!=='DELETE'&&local.has(k)&&synced.has(k)&&local.get(k)!==synced.get(k))return; // unsaved local edit wins, but a removal made elsewhere always applies
   if(p.eventType==='DELETE'){
     if(ARR_COLS.includes(c))state[c]=state[c].filter(x=>x.id!==id);else if(MAP_COLS.includes(c))delete state[c][id];
     synced.delete(k);
