@@ -234,6 +234,7 @@ details.sec .body{padding:0 20px 18px;display:flex;flex-direction:column;gap:4px
 .seg button.on.w{background:var(--warn-soft);color:var(--warn)}
 .seg button[disabled]{color:var(--muted);cursor:not-allowed;opacity:.6}
 .pick{display:flex;flex-direction:column;gap:6px;max-height:340px;overflow:auto}
+.pick .small{display:block}
 .pick label{display:flex;gap:10px;align-items:flex-start;border:1px solid var(--line);border-radius:8px;padding:9px 12px;cursor:pointer;font-weight:400;color:var(--ink)}
 .pick label:has(input:checked){border-color:var(--accent);background:var(--accent-soft)}
 .pick input{margin-top:3px}
@@ -1164,7 +1165,7 @@ function vSchedule(){
   const mates=[...new Set(state.sessions.filter(x=>x.groupId===st.pattern?.groupId&&x.studentId&&x.studentId!==st.id).map(x=>x.studentId))].map(id=>stName(studentById(id)));
   const p=st.pattern;const regTrainer=list[0]?.trainerId;
   const rows=list.map(s=>{const past=s.date<TODAY;
-    const flags=[s.kind==='makeup'?chip((s.mode==='join'?'Joined class':'One-to-one')+' · make-up for '+(s.forLabel||''),'accent'):'',s.makeup&&s.makeupMode==='pending'?chip('Make-up to arrange','warn'):'',s.makeup&&['one','join'].includes(s.makeupMode)?chip('Make-up booked','warn'):'',s.key[0]==='M'?chip(s.makeupFor==='Extra class'?'Extra class':'Make-up for '+s.makeupFor,'accent'):'',s.manual?chip('Moved','info'):'',s.conflict?chip('Room clash','bad'):'',s.status==='Cancelled'?chip('Not held: '+(s.reason||'—'),'bad'):'',schoolHolOn(s.date)?chip('School holiday','good'):''].join(' ');
+    const flags=[s.kind==='makeup'?chip((s.mode==='join'?'Joined class':'Make-up session')+' · for '+(s.forLabel||''),'accent'):'',s.makeup&&s.makeupMode==='pending'?chip('Make-up to arrange','warn'):'',s.makeup&&['one','join'].includes(s.makeupMode)?chip('Make-up booked','warn'):'',s.key[0]==='M'?chip(s.makeupFor==='Extra class'?'Extra class':'Make-up for '+s.makeupFor,'accent'):'',s.manual?chip('Moved','info'):'',s.conflict?chip('Room clash','bad'):'',s.status==='Cancelled'?chip('Not held: '+(s.reason||'—'),'bad'):'',schoolHolOn(s.date)?chip('School holiday','good'):''].join(' ');
     return `<tr class="${past?'past':''} ${s.status==='Cancelled'?'cancel':''}"><td><b>${s.key[0]==='R'?'Session '+s.key.slice(1):'Make-up '+s.key.slice(1)}</b></td><td>${fmtDw(s.date)}</td><td>${slotStr(s.start,s.end)}</td><td>${esc(s.room)}</td><td>${esc(trainerName(s.trainerId))}</td>
     <td><select data-chg="sess-override" data-id="${s.id}" aria-label="Override trainer">${trainerOpts(s.override,'No override')}</select></td>
     <td><select data-chg="sess-status" data-id="${s.id}" aria-label="Student status">${['Scheduled','Present','Absent','Cancelled'].map(o=>opt(o,s.status,o==='Cancelled'?'Not held':o)).join('')}</select></td>
@@ -1244,7 +1245,7 @@ function joinOptions(src){
   state.sessions.filter(x=>live(x)&&x.date>=TODAY&&x.date<=addDays(TODAY,28)).forEach(x=>{const k=slotKey(x);if(!m.has(k))m.set(k,[]);m.get(k).push(x)});
   return [...m.entries()].filter(([k,l])=>l.every(x=>['weekly','makeup','trial'].includes(x.kind))&&!l.some(x=>x.studentId===st.id)&&l.length<MAX_GROUP)
     .map(([k,l])=>{const h=l[0];const sameCourse=l.some(x=>norm(x.course)===norm(st.course)),sameLoc=h.location===locOf(st);
-      return {k,h,l,sameCourse,sameLoc,score:(sameCourse?2:0)+(sameLoc?1:0)}})
+      return {k,h,l,sameCourse,sameLoc,score:(sameCourse?4:0)+(sameCourse&&l.some(x=>x.kind==='makeup')?2:0)+(sameLoc?1:0)}})
     .sort((a,b)=>b.score-a.score||(a.h.date<b.h.date?-1:a.h.date>b.h.date?1:(a.h.start<b.h.start?-1:1))).slice(0,10);
 }
 function openArrange(id){
@@ -1257,12 +1258,12 @@ function openArrange(id){
   <form data-form="makeup" data-id="${src.id}" class="form">
     <div class="field full"><span class="lbl">How should the lesson be made up?</span><div class="pick" style="max-height:none">
       ${radio('join','Join another class','Recommended. The student sits in on a class that is already running, so no extra trainer hours.')}
-      ${radio('one','One-to-one class','A separate class for this student with a trainer and room you choose.')}
+      ${radio('one','Make-up session','A separate session at a time you choose. One-to-one, or add other students who need a make-up.')}
       ${weekly?radio('end','Add a class at the end of the course','One more class in the usual weekly slot, after the last session.'):''}
     </div></div>
     <div class="field full" data-mu="join"${first==='join'?'':' hidden'}><span class="lbl">Classes with space in the next 4 weeks</span>
       ${opts.length?`<div class="pick">${opts.map((o,i)=>{const names=o.l.map(x=>sessName(x));const hl=toMin(o.h.end)-toMin(o.h.start);
-        return `<label><input type="radio" name="host" value="${esc(o.k)}"${i===0?' checked':''}><span><b>${fmtDw(o.h.date)} · ${slotStr(o.h.start,o.h.end)}</b><span class="small mini">${esc(o.h.location)} · ${esc(o.h.room)} · ${esc(trainerName(effTrainer(o.h)))} · ${esc([...new Set(o.l.map(x=>x.course))].join(', '))}</span><span class="small mini">${o.l.length} student${o.l.length>1?'s':''}: ${esc(names.join(', '))}</span><span class="row" style="margin-top:4px;gap:4px">${o.sameCourse?chip('Same course','good'):chip('Different course')}${o.sameLoc?'':chip('Different location','warn')}${hl!==len?chip(hl+' min','info'):''}</span></span></label>`}).join('')}</div>`:'<p class="muted" style="margin:0">No class has space in the next 4 weeks. Book a one-to-one class instead.</p>'}
+        return `<label><input type="radio" name="host" value="${esc(o.k)}"${i===0?' checked':''}><span><b>${fmtDw(o.h.date)} · ${slotStr(o.h.start,o.h.end)}</b><span class="small mini">${esc(o.h.location)} · ${esc(o.h.room)} · ${esc(trainerName(effTrainer(o.h)))} · ${esc([...new Set(o.l.map(x=>x.course))].join(', '))}</span><span class="small mini">${o.l.length} student${o.l.length>1?'s':''}: ${esc(names.join(', '))}</span><span class="row" style="margin-top:4px;gap:4px">${o.l.some(x=>x.kind==='makeup')?chip('Make-up session','accent'):''}${o.sameCourse?chip('Same course','good'):chip('Different course')}${o.sameLoc?'':chip('Different location','warn')}${hl!==len?chip(hl+' min','info'):''}</span></span></label>`}).join('')}</div>`:'<p class="muted" style="margin:0">No class has space in the next 4 weeks. Book a make-up session instead.</p>'}
     </div>
     <div class="full form" data-mu="one"${first==='one'?'':' hidden'} style="padding:0">
       <div class="field"><label for="mu-date">Date</label><input type="date" id="mu-date" name="date" value="${d1}"></div>
@@ -1270,6 +1271,8 @@ function openArrange(id){
       <div class="field"><label for="mu-dur">Duration in minutes</label><input type="number" id="mu-dur" name="duration" min="15" max="480" step="15" value="${len}"></div>
       <div class="field"><label for="mu-room">Classroom</label><select id="mu-room" name="room">${opt('auto','auto','First free room')}${state.classrooms.map(r=>opt(r,'',r)).join('')}</select></div>
       <div class="field full"><label for="mu-tr">Trainer</label><select id="mu-tr" name="trainer">${opt('auto','auto','First free trainer')}${trainerOpts('')}</select></div>
+      <div class="field full"><span class="lbl">Also add students waiting for a make-up</span>${(()=>{const others=pendingMakeups().filter(x=>x.id!==src.id).sort((a,b)=>(norm(b.course)===norm(st.course))-(norm(a.course)===norm(st.course))||(a.date<b.date?-1:1));
+        return others.length?`<div class="checks">${others.map(x=>`<label><input type="checkbox" name="also" value="${x.id}"> ${esc(sessName(x))} <span class="mini">· ${esc(x.course)} · missed ${esc(sessionTag(x))} on ${fmtD(x.date)}</span>${norm(x.course)===norm(st.course)?' '+chip('Same course','good'):''}</label>`).join('')}</div><span class="hint">Leave all unticked for a one-to-one session. Other students can also join it later from their own Arrange window.</span>`:'<span class="hint">No other students are waiting for a make-up. Others can join this session later from their own Arrange window.</span>'})()}</div>
     </div>
     <div class="full" data-mu="end" hidden><p class="mini" style="margin:0">The course stretches by one week. You can see the new class in the Schedule Generator.</p></div>
     <div class="full foot"><button type="button" class="btn" data-act="modal-close">Cancel</button><button class="btn primary">Book make-up</button></div>
@@ -1339,8 +1342,8 @@ function vAttendance(){
     const courses=[...new Set(c.list.map(x=>x.course))];
     const firstSt=c.list.find(x=>x.studentId)?.studentId;
     const rows=c.list.map(s=>{const st=s.studentId?studentById(s.studentId):null;const a=attState(s);const nx=nextOf(s);const trial=s.kind==='trial';
-      const extra=s.kind==='makeup'?chip(s.mode==='join'?'Joined from another class':'One-to-one','accent'):
-        a==='Makeup'?(s.makeupMode==='pending'?`${chip('Make-up to arrange','warn')}<button class="btn sm" data-act="mu-arrange" data-id="${s.id}">Arrange</button>`:s.makeupMode==='end'?chip('Make-up added at end of course','warn'):(()=>{const mk=state.sessions.find(x=>x.id===s.makeupRef);return mk?chip(`Make-up ${mk.mode==='join'?'(joined class)':'(one-to-one)'} ${fmtD(mk.date)}, ${fmtT(mk.start)}`,'warn'):''})()):'';
+      const extra=s.kind==='makeup'?chip(s.mode==='join'?'Joined from another class':'Make-up session','accent'):
+        a==='Makeup'?(s.makeupMode==='pending'?`${chip('Make-up to arrange','warn')}<button class="btn sm" data-act="mu-arrange" data-id="${s.id}">Arrange</button>`:s.makeupMode==='end'?chip('Make-up added at end of course','warn'):(()=>{const mk=state.sessions.find(x=>x.id===s.makeupRef);return mk?chip(`Make-up ${mk.mode==='join'?'(joined class)':'session'} ${fmtD(mk.date)}, ${fmtT(mk.start)}`,'warn'):''})()):'';
       return `<div><div class="who"><div><b>${esc(sessName(s))}</b> <span class="mini">${trial?'Trial · '+esc(s.course):esc(s.course)+(st?.code?' · '+esc(st.code):'')}</span></div>
         <div class="row" style="gap:6px"><span class="tag">${esc(sessionTag(s))}</span>${nx?chip(`Next: ${nx.kind==='makeup'?'Make-up':nx.key[0]==='R'?'Session '+nx.key.slice(1):'Make-up'} · ${fmtD(nx.date)}`,'info'):''}${extra}</div></div>
         <div class="seg" role="group" aria-label="Attendance for ${esc(sessName(s))}">
@@ -1365,7 +1368,7 @@ function vAttendance(){
   ${future?'<p class="mini" style="margin:0">Trainer attendance can be marked on the day or afterwards. You can mark a student absent in advance.</p>':''}
   <div class="grid2">
     <div class="card"><h2>Make-ups to arrange ${chip(pend.length,pend.length?'warn':'good')}</h2>${pend.length?`<div class="list">${pend.map(x=>`<div class="it"><div><b>${esc(sessName(x))}</b><span class="small mini">Missed ${esc(sessionTag(x))} · ${fmtDw(x.date)} · ${esc(x.course)}</span></div><button class="btn sm primary" data-act="mu-arrange" data-id="${x.id}">Arrange</button></div>`).join('')}</div>`:'<p class="muted" style="margin:0">Nothing waiting.</p>'}</div>
-    <div class="card"><h2>Upcoming make-ups ${chip(upc.length)}</h2>${upc.length?`<div class="list">${upc.map(x=>`<div class="it"><div><b>${esc(sessName(x))}</b> ${chip(x.mode==='join'?'Joined class':'One-to-one',x.mode==='join'?'good':'accent')}<span class="small mini">${fmtDw(x.date)} · ${slotStr(x.start,x.end)} · ${esc(x.location)} · ${esc(x.room)} · ${esc(trainerName(effTrainer(x)))}</span><span class="small mini">For ${esc(x.forLabel)} missed on ${fmtD(x.forDate)}</span></div><div class="row"><button class="btn sm" data-act="att-goto" data-d="${x.date}">View day</button><button class="btn sm ghost danger" data-act="mu-cancel" data-id="${x.id}">Cancel</button></div></div>`).join('')}</div>`:'<p class="muted" style="margin:0">None booked.</p>'}</div>
+    <div class="card"><h2>Upcoming make-ups ${chip(upc.length)}</h2>${upc.length?`<div class="list">${upc.map(x=>`<div class="it"><div><b>${esc(sessName(x))}</b> ${chip(x.mode==='join'?'Joined class':'Make-up session',x.mode==='join'?'good':'accent')}<span class="small mini">${fmtDw(x.date)} · ${slotStr(x.start,x.end)} · ${esc(x.location)} · ${esc(x.room)} · ${esc(trainerName(effTrainer(x)))}</span><span class="small mini">For ${esc(x.forLabel)} missed on ${fmtD(x.forDate)}</span></div><div class="row"><button class="btn sm" data-act="att-goto" data-d="${x.date}">View day</button><button class="btn sm ghost danger" data-act="mu-cancel" data-id="${x.id}">Cancel</button></div></div>`).join('')}</div>`:'<p class="muted" style="margin:0">None booked.</p>'}</div>
   </div>`;
 }
 
@@ -1602,8 +1605,10 @@ const FORMS={
       if(room==='auto'){room=state.classrooms.find(r=>!roomBusy(date,start,end,loc,r,gid));if(!room){room=state.classrooms[0];conflict=true}}else conflict=roomBusy(date,start,end,loc,room,gid);
       let tr=fd.get('trainer');if(tr==='auto')tr=pickTrainer(date,start,end,gid)||effTrainer(src);
       o={date,start,end,location:loc,room,trainerId:tr,groupId:gid,conflict}}
-    const mk=bookMakeup(src,mode,o);closeModal();
-    commit(`Make-up booked for ${fmtDw(mk.date)}, ${fmtT(mk.start)}`+(mk.conflict?'. That room is already booked then, so check the classroom.':''))},
+    const mk=bookMakeup(src,mode,o);let extra=0;
+    if(mode==='one')fd.getAll('also').forEach(id=>{const x=state.sessions.find(y=>y.id===id);if(x&&x.makeup&&x.makeupMode==='pending'){bookMakeup(x,'one',{...o});extra++}});
+    closeModal();
+    commit(`Make-up ${mode==='one'?'session':''} booked for ${fmtDw(mk.date)}, ${fmtT(mk.start)}${extra?` with ${extra+1} students`:''}`+(mk.conflict?'. That room is already booked then, so check the classroom.':''))},
   lead:(f,fd)=>{const id=f.dataset.id;const type=f.dataset.type;const fields=type==='B2C'?B2C_FIELDS:B2B_FIELDS;
     const l=id?leadById(id):{id:uid(),type,createdAt:TODAY,lastContact:''};
     fields.forEach(([k])=>l[k]=(fd.get(k)||'').trim());l.status=fd.get('status');
