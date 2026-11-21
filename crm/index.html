@@ -1249,6 +1249,20 @@ function joinOptions(src){
       return {k,h,l,sameCourse,sameLoc,score:(sameCourse?4:0)+(sameCourse&&l.some(x=>x.kind==='makeup')?2:0)+(sameLoc?1:0)}})
     .sort((a,b)=>b.score-a.score||Math.abs(diffDays(a.h.date,src.date))-Math.abs(diffDays(b.h.date,src.date))||(a.h.start<b.h.start?-1:1)).slice(0,12);
 }
+// After a make-up is booked: offer it to other students on the same course who are waiting for one.
+function suggestOthers(mk){
+  if(!mk)return;const st=studentById(mk.studentId);if(!st)return;
+  const inSlot=state.sessions.filter(x=>live(x)&&slotKey(x)===slotKey(mk));const space=MAX_GROUP-inSlot.length;if(space<=0)return;
+  const src=state.sessions.find(x=>x.studentId===mk.studentId&&x.key===mk.forKey);
+  const c=pendingMakeups().filter(x=>x.studentId!==mk.studentId&&!inSlot.some(y=>y.studentId===x.studentId)&&norm(x.course)===norm(st.course))
+    .map(x=>({x,sameClass:!!src&&x.groupId===src.groupId,sameDay:!!src&&x.date===src.date}))
+    .sort((a,b)=>(b.sameClass+b.sameDay)-(a.sameClass+a.sameDay)||(a.x.date<b.x.date?-1:1))
+    .filter((o,i,arr)=>arr.findIndex(y=>y.x.studentId===o.x.studentId)===i);
+  if(!c.length)return;
+  openModal(`<h2>Add others to this make-up?</h2><p class="muted" style="margin:0">${fmtDw(mk.date)} · ${slotStr(mk.start,mk.end)} · ${esc(mk.room)} · ${esc(trainerName(effTrainer(mk)))}. These students on ${esc(st.course)} are also waiting for a make-up. Room for ${space} more.</p>
+  <form data-form="mkothers" data-id="${mk.id}" style="display:flex;flex-direction:column;gap:14px"><div class="checks">${c.map(o=>`<label><input type="checkbox" name="add" value="${o.x.id}"${o.sameClass&&o.sameDay?' checked':''}> ${esc(sessName(o.x))} <span class="mini">· missed ${esc(sessionTag(o.x))} on ${fmtD(o.x.date)}</span>${o.sameClass&&o.sameDay?' '+chip('Same class, same day','good'):o.sameClass?' '+chip('Same class','good'):''}</label>`).join('')}</div>
+  <div class="foot"><button type="button" class="btn" data-act="modal-close">Not now</button><button class="btn primary">Add to this make-up</button></div></form>`);
+}
 function openArrange(id){
   const src=state.sessions.find(x=>x.id===id);const st=studentById(src.studentId);const weekly=src.kind==='weekly';
   const opts=joinOptions(src);const len=toMin(src.end)-toMin(src.start);
@@ -1545,6 +1559,11 @@ const CHG={
     commit(big.length?`${big.join(', ')} ${big.length>1?'are':'is'} over 10 MB and was not added.`:`${added} file${added>1?'s':''} added to ${topic}, day ${day}`)}
 };
 const FORMS={
+  mkothers:(f,fd)=>{const host=state.sessions.find(x=>x.id===f.dataset.id);if(!host)return;const ids=fd.getAll('add');
+    const space=MAX_GROUP-state.sessions.filter(x=>live(x)&&slotKey(x)===slotKey(host)).length;
+    if(ids.length>space){toast(`Only ${space} place${space===1?'':'s'} left in this session.`);return}
+    let n=0;const seen=new Set(state.sessions.filter(x=>live(x)&&slotKey(x)===slotKey(host)).map(x=>x.studentId));ids.forEach(id=>{const x=state.sessions.find(y=>y.id===id);if(x&&x.makeup&&x.makeupMode==='pending'&&!seen.has(x.studentId)){seen.add(x.studentId);bookMakeup(x,'join',{date:host.date,start:host.start,end:host.end,location:host.location,room:host.room,trainerId:effTrainer(host),groupId:host.groupId,conflict:false});n++}});
+    closeModal();commit(n?`${n} more student${n>1?'s':''} added to the ${fmtD(host.date)} make-up`:'Nothing added')},
   invadj:(f,fd)=>{const id=f.dataset.id;state.invoiceAdj??={};const months=new Set([...fd.keys()].map(k=>k.split('|')[1]));let bad='';
     months.forEach(mk=>{const amt=(fd.get('amt|'+mk)||'').trim(),mkc=(fd.get('mk|'+mk)||'').trim(),note=(fd.get('note|'+mk)||'').trim();const key=`${id}|${mk}`;
       if(amt!==''&&!(+amt>=0))bad=monthLabel(mk);
@@ -1608,7 +1627,7 @@ const FORMS={
       o={date,start,end,location:loc,room,trainerId:tr,groupId:gid,conflict}}
     const mk=bookMakeup(src,mode,o);let extra=0;
     if(mode==='one')fd.getAll('also').forEach(id=>{const x=state.sessions.find(y=>y.id===id);if(x&&x.makeup&&x.makeupMode==='pending'){bookMakeup(x,'one',{...o});extra++}});
-    closeModal();
+    closeModal();setTimeout(()=>suggestOthers(mk),0);
     commit(`Make-up ${mode==='one'?'session':''} booked for ${fmtDw(mk.date)}, ${fmtT(mk.start)}${extra?` with ${extra+1} students`:''}`+(mk.conflict?'. That room is already booked then, so check the classroom.':''))},
   lead:(f,fd)=>{const id=f.dataset.id;const type=f.dataset.type;const fields=type==='B2C'?B2C_FIELDS:B2B_FIELDS;
     const l=id?leadById(id):{id:uid(),type,createdAt:TODAY,lastContact:''};
