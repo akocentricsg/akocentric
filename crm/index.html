@@ -472,7 +472,7 @@ const keyLabel=k=>k[0]==='R'?'#'+k.slice(1):'Make-up '+k.slice(1);
 const isEndMk=x=>x.makeup&&(x.makeupMode||'end')==='end';
 const newCode=()=>{let c;do{c=String(1000+Math.floor(Math.random()*9000))}while(state.students.some(s=>s.code===c));return c};
 const slotKey=x=>[x.date,x.start,x.location,x.room].join('|');
-function blockedOn(d){return state.holidays.find(h=>(h.kind==='public'||h.kind==='adhoc')&&h.date===d)}
+function blockedOn(d){return state.holidays.find(h=>(h.kind==='public'||h.kind==='adhoc')&&d>=h.date&&d<=(h.end||h.date))}
 function schoolHolOn(d){return state.holidays.find(h=>h.kind==='school'&&d>=h.date&&d<=(h.end||h.date))}
 function normLoc(t){const n=norm(t);const hit=state.locations.find(l=>{const k=norm(l).split(/[\s(]/)[0];return k&&n.includes(k)});return hit||(t||'').trim()||state.locations[0]||'Ad-hoc'}
 function overlap(x,d,s,e){return x.date===d&&toMin(x.start)<toMin(e)&&toMin(s)<toMin(x.end)}
@@ -504,11 +504,15 @@ function generateStudent(st,oldList){
   const out=[...kept];
   if(kind==='weekly'){
     const dur=st.duration||90;
-    const wantDay=(st.slotDay===''||st.slotDay==null)?null:+st.slotDay, wantTime=st.slotTime||null;
+    // No fixed slot: stay on the weekday and in the class group the student already has.
+    const prevR=prior.filter(x=>x.key&&x.key[0]==='R'&&!x.manual&&x.groupId&&x.date>=(st.startDate||'')).sort((a,b)=>a.date<b.date?-1:1);
+    const noSlot=st.slotDay===''||st.slotDay==null;
+    const wantDay=noSlot?(prevR.length?dow(prevR[prevR.length-1].date):null):+st.slotDay, wantTime=st.slotTime||(noSlot&&prevR.length?prevR[prevR.length-1].start:null);
+    const prevGid=prevR.length?prevR[prevR.length-1].groupId:null;
     let pat=null;
     const groups={};
     state.sessions.forEach(x=>{if(x.kind==='weekly'&&x.studentId&&x.location===loc&&norm(x.course)===norm(st.course)&&x.key[0]==='R'&&!x.manual)(groups[x.groupId]??=[]).push(x)});
-    for(const [gid,list] of Object.entries(groups)){
+    for(const [gid,list] of Object.entries(groups).sort((a,b)=>(b[0]===prevGid)-(a[0]===prevGid))){
       if(new Set(list.map(x=>x.studentId)).size>=MAX_GROUP)continue;
       const last=list.reduce((a,x)=>x.date>a?x.date:a,'');
       if(last<from)continue;
@@ -516,7 +520,7 @@ function generateStudent(st,oldList){
       if(toMin(f.end)-toMin(f.start)!==dur)continue;
       if(wantDay!==null&&dow(f.date)!==wantDay)continue;
       if(wantTime&&f.start!==wantTime)continue;
-      pat={wd:dow(f.date),start:f.start,dur,room:f.room,trainerId:f.trainerId,groupId:gid,joined:true};break;
+      pat={wd:dow(f.date),start:f.start,dur,room:f.room,trainerId:f.trainerId,groupId:gid,joined:gid!==prevGid};break;
     }
     if(!pat){
       outer:for(let i=0;i<14;i++){
@@ -1112,7 +1116,7 @@ async function loadStaff(){ui.staffLoading=true;const {data,error}=await sb.from
 async function staffAction(body,msg){try{await callStaff(body);ui.staffLoaded=false;await loadStaff();toast(msg);render()}catch(e){toast(e.message)}}
 function vSettings(){
   const f=ui.holFilter;const hs=state.holidays.filter(h=>f==='all'||h.kind===f).sort((a,b)=>a.date<b.date?-1:1);
-  const tone={public:'info',adhoc:'accent',school:'good'},lbl={public:'Public holiday',adhoc:'Ad-hoc holiday',school:'School holiday'};
+  const tone={public:'info',adhoc:'accent',school:'good'},lbl={public:'Public holiday',adhoc:'Centre closure',school:'School holiday'};
   const years=[...new Set(hs.map(h=>h.date.slice(0,4)))];
   const used=(k,v)=>state.students.filter(s=>s[k]===v).length;
   const items=(arr,act,k)=>arr.length?arr.map(x=>{const n=used(k,x);return `<div class="it"><b>${esc(x)}</b><span class="mini right">${n} student${n===1?'':'s'}</span><button class="btn sm ghost danger" data-act="${act}" data-v="${esc(x)}">Delete</button></div>`}).join(''):'<p class="muted" style="margin:0">None yet.</p>';
@@ -1127,10 +1131,10 @@ function vSettings(){
   <div class="card"><h2>Classrooms</h2><p class="sub">Available at every location.</p><div class="list">${state.classrooms.map(r=>`<div class="it"><b>${esc(r)}</b><span class="mini right">${state.sessions.filter(x=>x.room===r&&x.date>=TODAY&&live(x)).length} upcoming classes</span><button class="btn sm ghost danger" data-act="room-remove" data-room="${esc(r)}">Delete</button></div>`).join('')}</div>
     <form data-form="room" class="row" style="flex-wrap:nowrap"><input type="text" name="room" maxlength="60" placeholder="Classroom name" aria-label="New classroom" required><button class="btn">Add</button></form></div>
   </div>
-  <div class="card"><h2>Add a holiday</h2><p class="sub">Classes skip public and ad-hoc holidays. School holidays are marked, but classes still run.</p><div class="grid2">
-    <form data-form="adhoc" class="form"><div class="field"><label for="ah-date">Ad-hoc holiday date</label><input type="date" id="ah-date" name="date" required></div><div class="field"><label for="ah-name">Name</label><input type="text" id="ah-name" name="name" maxlength="100" required placeholder="e.g. Staff training day"></div><div class="full"><button class="btn">Add ad-hoc holiday</button></div></form>
+  <div class="card"><h2>Add a holiday or centre closure</h2><p class="sub">Classes skip public holidays and centre closures, and schedules rebuild straight away. School holidays are marked, but classes still run. To open on a public holiday, remove it from the calendar below.</p><div class="grid2">
+    <form data-form="adhoc" class="form"><div class="field"><label for="ah-date">Centre closed from</label><input type="date" id="ah-date" name="date" required></div><div class="field"><label for="ah-to">To <span class="mini">(blank for one day)</span></label><input type="date" id="ah-to" name="to"></div><div class="field full"><label for="ah-name">Reason</label><input type="text" id="ah-name" name="name" maxlength="100" required placeholder="e.g. Closed the day after Deepavali"></div><div class="full"><button class="btn">Add centre closure</button></div></form>
     <form data-form="school" class="form"><div class="field"><label for="sh-from">School holiday from</label><input type="date" id="sh-from" name="from" required></div><div class="field"><label for="sh-to">To</label><input type="date" id="sh-to" name="to" required></div><div class="field full"><label for="sh-name">Name</label><input type="text" id="sh-name" name="name" maxlength="100" required placeholder="e.g. March school holidays"></div><div class="full"><button class="btn">Add school holiday</button></div></form></div></div>
-  <div class="card"><div class="row"><h2>Holiday calendar</h2><div class="row right">${[['all','All'],['public','Public'],['adhoc','Ad-hoc'],['school','School']].map(([k,l])=>`<button class="btn sm${f===k?' primary':''}" data-act="hol-filter" data-f="${k}">${l}</button>`).join('')}</div></div>
+  <div class="card"><div class="row"><h2>Holiday calendar</h2><div class="row right">${[['all','All'],['public','Public'],['adhoc','Closures'],['school','School']].map(([k,l])=>`<button class="btn sm${f===k?' primary':''}" data-act="hol-filter" data-f="${k}">${l}</button>`).join('')}</div></div>
   <p class="sub">Singapore public holidays for 2026 and 2027 as gazetted by the Ministry of Manpower, including observed Mondays.</p>
   ${years.map(y=>`<div><div class="eyebrow" style="margin:6px 0">${y}</div>${table(['Date','Holiday','Type',''],hs.filter(h=>h.date.startsWith(y)).map(h=>`<tr class="${(h.end||h.date)<TODAY?'past':''}"><td>${h.end?`${fmtD(h.date)} – ${fmtD(h.end)}`:fmtDw(h.date)}</td><td>${esc(h.name)}</td><td>${chip(lbl[h.kind],tone[h.kind])}</td><td><button class="btn sm ghost danger" data-act="hol-remove" data-id="${h.id}">Remove</button></td></tr>`))}</div>`).join('')||'<p class="muted">No holidays of this type.</p>'}</div>`;
 }
@@ -1146,6 +1150,7 @@ function royaltyLines(){
   state.students.filter(st=>st.scheduleType!=='Weekly Courses'&&st.fee>0&&st.startDate&&isFranchise(st.course)).forEach(st=>out.push({month:monthKey(st.startDate),date:st.startDate,st,course:st.course,type:st.scheduleType==='Holiday Camp'?'Camp':'Workshop',ref:'Enrollment fee',amount:+st.fee,paid:null}));
   return out.sort((a,b)=>a.date<b.date?-1:1);
 }
+const royRow=l=>({'Month':monthLabel(l.month),'Date':l.date,'Student':stName(l.st),'Programme':l.course,'Type':l.type,'Reference':l.ref,'Amount ($)':l.amount,'Collected':l.paid===null?'':l.paid?'Paid':'Unpaid'});
 function royaltyMonths(){
   const r=roy(),pct=(+r.royaltyPct||0)+(+r.marketingPct||0);const by={};
   royaltyLines().forEach(l=>{const m=(by[l.month]??={month:l.month,revenue:0,lines:0});m.revenue=round2(m.revenue+l.amount);m.lines++});
@@ -1169,11 +1174,11 @@ function vRoyalty(){
   const lines=royaltyLines().filter(l=>l.month===ui.royMonth);
   const rows=months.map(m=>`<tr class="${m.month===ui.royMonth?'':''}"><td><button class="linkbtn" data-act="roy-month" data-m="${m.month}">${monthLabel(m.month)}</button>${m.month>nowM?'<span class="small">Upcoming</span>':''}</td><td class="num">${m.lines}</td><td class="num">${money(m.revenue)}</td><td class="num">${money(m.royalty)}</td><td class="num">${money(m.marketing)}</td><td class="num"><b>${money(m.total)}</b></td>
     <td>${m.paid?chip('Paid '+fmtD(m.paid),'good'):m.month>nowM?chip('Not due'):`<button class="btn sm" data-act="roy-paid" data-m="${m.month}">Mark paid</button>`}${m.paid?` <button class="btn sm ghost" data-act="roy-unpaid" data-m="${m.month}">Undo</button>`:''}</td></tr>`);
-  return header('Module 1','Royalties',`Royalty payable to Resolute Robotics: ${esc(r.royaltyPct)}% royalty + ${esc(r.marketingPct)}% marketing = ${pct}% of franchise revenue. Revenue counts weekly-course invoices once issued, and camp and workshop fees in their start month. Change the rates and programmes in Settings.`,`<button class="btn" data-act="export-royalty">Export to Excel</button><a class="btn" href="#setup">Royalty settings</a>`)+
+  return header('Module 1','Royalties',`Royalty payable to Resolute Robotics: ${esc(r.royaltyPct)}% royalty + ${esc(r.marketingPct)}% marketing = ${pct}% of franchise revenue. Revenue counts weekly-course invoices once issued, and camp and workshop fees in their start month. Change the rates and programmes in Settings.`,`<button class="btn primary" data-act="export-royalty">Export all to Excel</button><a class="btn" href="#setup">Royalty settings</a>`)+
   `<div class="stats"><div class="stat"><span class="l">Franchise revenue ${nowM.slice(0,4)}</span><span class="v">${money(sum('revenue'))}</span></div><div class="stat"><span class="l">Royalty (${esc(r.royaltyPct)}%) ${nowM.slice(0,4)}</span><span class="v">${money(sum('royalty'))}</span></div><div class="stat"><span class="l">Marketing (${esc(r.marketingPct)}%) ${nowM.slice(0,4)}</span><span class="v">${money(sum('marketing'))}</span></div><div class="stat"><span class="l">Payable, not yet paid</span><span class="v">${money(owed)}</span><span class="mini">up to ${monthLabel(nowM)}</span></div></div>
   ${r.courses.length?'':'<div class="notice"><b>No programmes selected.</b><span>Tick the Resolute franchise courses, camps and workshops in Settings.</span></div>'}
   <div class="card"><h2>By month</h2>${table(['Month',['Items','num'],['Revenue','num'],[`Royalty ${esc(r.royaltyPct)}%`,'num'],[`Marketing ${esc(r.marketingPct)}%`,'num'],[`Total ${pct}%`,'num'],'Paid to Resolute'],rows,'No franchise revenue yet.')}</div>
-  <div class="card"><h2>${monthLabel(ui.royMonth)}: what's included</h2>${table(['Date','Student','Programme','Type','Reference',['Amount','num'],'Collected'],lines.map(l=>`<tr><td>${fmtD(l.date)}</td><td>${esc(stName(l.st))}</td><td>${esc(l.course)}</td><td>${l.type}</td><td class="mono">${esc(l.ref)}</td><td class="num">${money(l.amount)}</td><td>${l.paid===null?'<span class="muted">—</span>':l.paid?chip('Paid','good'):chip('Unpaid','warn')}</td></tr>`),'Nothing for this month.')}
+  <div class="card"><div class="row"><h2>${monthLabel(ui.royMonth)}: what's included</h2><button class="btn sm right" data-act="export-royalty-month" data-m="${ui.royMonth}">Export ${monthLabel(ui.royMonth)} to Excel</button></div>${table(['Date','Student','Programme','Type','Reference',['Amount','num'],'Collected'],lines.map(l=>`<tr><td>${fmtD(l.date)}</td><td>${esc(stName(l.st))}</td><td>${esc(l.course)}</td><td>${l.type}</td><td class="mono">${esc(l.ref)}</td><td class="num">${money(l.amount)}</td><td>${l.paid===null?'<span class="muted">—</span>':l.paid?chip('Paid','good'):chip('Unpaid','warn')}</td></tr>`),'Nothing for this month.')}
   <p class="mini" style="margin:0">A camp or workshop only counts when a fee is entered on its enrollment.</p></div>`;
 }
 
@@ -1441,9 +1446,18 @@ const ACT={
   'roy-month':d=>{ui.royMonth=d.m;render()},
   'roy-paid':d=>{const r=roy();(r.paid??={})[d.m]=TODAY;commit(`${monthLabel(d.m)} royalty marked paid`)},
   'roy-unpaid':d=>{const r=roy();delete r.paid[d.m];commit(`${monthLabel(d.m)} royalty marked unpaid`)},
-  'export-royalty':()=>{const r=roy();exportXlsx(`ako-resolute-royalty-${TODAY}.xlsx`,[
-    ['By month',royaltyMonths().map(m=>({'Month':monthLabel(m.month),'Items':m.lines,'Franchise revenue ($)':m.revenue,[`Royalty ${r.royaltyPct}% ($)`]:m.royalty,[`Marketing ${r.marketingPct}% ($)`]:m.marketing,'Total payable ($)':m.total,'Paid to Resolute':m.paid||''}))],
-    ['Revenue lines',royaltyLines().map(l=>({'Month':monthLabel(l.month),'Date':l.date,'Student':stName(l.st),'Programme':l.course,'Type':l.type,'Reference':l.ref,'Amount ($)':l.amount,'Collected':l.paid===null?'':l.paid?'Paid':'Unpaid'}))]])},
+  'export-royalty':()=>{const r=roy(),ms=royaltyMonths(),L=royaltyLines(),t=k=>round2(ms.reduce((a,m)=>a+m[k],0));
+    exportXlsx(`ako-resolute-royalty-${TODAY}.xlsx`,[
+    ['Summary',[{'Item':'Exported','Value':TODAY},{'Item':'Royalty rate (%)','Value':+r.royaltyPct},{'Item':'Marketing rate (%)','Value':+r.marketingPct},{'Item':'Total rate (%)','Value':round2((+r.royaltyPct||0)+(+r.marketingPct||0))},
+      {'Item':'Franchise revenue, all months ($)','Value':t('revenue')},{'Item':'Royalty, all months ($)','Value':t('royalty')},{'Item':'Marketing, all months ($)','Value':t('marketing')},{'Item':'Total payable, all months ($)','Value':t('total')},
+      {'Item':'Paid to Resolute ($)','Value':round2(ms.filter(m=>m.paid).reduce((a,m)=>a+m.total,0))},{'Item':'Not yet paid, up to this month ($)','Value':round2(ms.filter(m=>!m.paid&&m.month<=monthKey(TODAY)).reduce((a,m)=>a+m.total,0))}]],
+    ['By month',ms.map(m=>({'Month':monthLabel(m.month),'Items':m.lines,'Franchise revenue ($)':m.revenue,[`Royalty ${r.royaltyPct}% ($)`]:m.royalty,[`Marketing ${r.marketingPct}% ($)`]:m.marketing,'Total payable ($)':m.total,'Paid to Resolute':m.paid||''}))],
+    ['Revenue lines',L.map(royRow)],
+    ['Programmes',r.courses.map(c=>({'Franchise programme':c,'Revenue ($)':round2(L.filter(l=>l.course===c).reduce((a,l)=>a+l.amount,0))}))]])},
+  'export-royalty-month':d=>{const r=roy(),m=royaltyMonths().find(x=>x.month===d.m)||{revenue:0,royalty:0,marketing:0,total:0,paid:''};const L=royaltyLines().filter(l=>l.month===d.m);
+    const rows=L.map(royRow);const tot=(a,b)=>({'Month':'','Date':'','Student':'','Programme':'','Type':'','Reference':a,'Amount ($)':b,'Collected':''});
+    rows.push(tot('',''),tot('Franchise revenue',m.revenue),tot(`Royalty ${r.royaltyPct}%`,m.royalty),tot(`Marketing ${r.marketingPct}%`,m.marketing),tot('Total payable to Resolute',m.total),tot('Paid on',m.paid||'Not yet paid'));
+    exportXlsx(`ako-resolute-royalty-${d.m}.xlsx`,[[monthLabel(d.m),rows]])},
   'inv-adjust':d=>openInvAdjust(d.st),
   'cur-tab':d=>{ui.cur.tab=d.tab;render()},
   'cur-open':d=>curNav(d.pid,null),
@@ -1531,7 +1545,7 @@ const ACT={
 ${slotStr(s.start,s.end)}`,stName(st),st.course,s.location]));
     offerFile(`schedule-${st.username}-parents.pdf`,doc.output('arraybuffer'))},
   'hol-filter':d=>{ui.holFilter=d.f;render()},
-  'hol-remove':d=>{state.holidays=state.holidays.filter(h=>h.id!==d.id);commit('Holiday removed. Use “Apply to all schedules” to rebuild.')},
+  'hol-remove':d=>{const h=state.holidays.find(x=>x.id===d.id);if(!h)return;state.holidays=state.holidays.filter(x=>x.id!==d.id);if(h.kind!=='school'){regenAll();commit(`${h.name} removed, schedules updated`)}else commit(`${h.name} removed`)},
   'regen-all':()=>{regenAll();commit('All schedules regenerated')},
   'regen-one':()=>{const st=studentById(ui.schedStudent);regenFor(st);commit('Schedule regenerated')},
   'add-extra':()=>{const st=studentById(ui.schedStudent);if(st.scheduleType!=='Weekly Courses'){toast('Make-up classes apply to weekly courses.');return}st.extra=(st.extra||0)+1;regenFor(st);commit('Make-up class added at the end')},
@@ -1704,7 +1718,7 @@ const FORMS={
     if(dur!==null&&(!(dur>=15)||dur>480)){toast('Enter a duration between 15 and 480 minutes.');return}
     const sd=fd.get('startDate');if(!sd){toast('Choose a start date.');return}st.startDate=sd;st.slotDay=fd.get('slotDay')??'';st.slotTime=fd.get('slotTime')||'';st.duration=dur;closeModal();generateStudent(st);
     commit(st.note||(`Schedule regenerated. First class: ${firstClassOf(st)?fmtDw(firstClassOf(st)):'none'}.`+slotWarning(st.slotDay,st.slotTime,dur||(st.scheduleType==='Weekly Courses'?90:180))))},
-  adhoc:(f,fd)=>{state.holidays.push({id:uid(),date:fd.get('date'),name:fd.get('name').trim(),kind:'adhoc'});regenAll();commit('Ad-hoc holiday added, schedules updated')},
+  adhoc:(f,fd)=>{let a=fd.get('date'),b=fd.get('to')||'';if(b&&b<a)[a,b]=[b,a];const h={id:uid(),date:a,name:fd.get('name').trim(),kind:'adhoc'};if(b&&b!==a)h.end=b;state.holidays.push(h);regenAll();commit('Centre closure added, schedules updated')},
   school:(f,fd)=>{let a=fd.get('from'),b=fd.get('to');if(b<a)[a,b]=[b,a];state.holidays.push({id:uid(),date:a,end:b,name:fd.get('name').trim(),kind:'school'});commit('School holiday added. Classes still run.')},
   resched:(f,fd)=>{const s=state.sessions.find(x=>x.id===f.dataset.id);s.reason=fd.get('reason');
     if(fd.get('mode')==='move'){const d=fd.get('date');if(!d){toast('Choose a new date.');return}
