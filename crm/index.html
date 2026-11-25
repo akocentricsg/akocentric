@@ -451,6 +451,7 @@ function migrate(o){
   if(!o.users)o.users=JSON.parse(JSON.stringify(DEFAULT_USERS));
   if(!o.classNotes)o.classNotes={};
   if(!o.invoiceAdj)o.invoiceAdj={};
+  if(!o.royalty)o.royalty=defaultRoyalty(o.courses);
   if(!o.curriculum)o.curriculum=defaultCurriculum(o.courses);
   if(!o.curCats)restructureCats(o);
   (o.students||[]).forEach(st=>{if(!st.code){let c;do{c=String(1000+Math.floor(Math.random()*9000))}while(o.students.some(x=>x.code===c));st.code=c}});
@@ -669,7 +670,7 @@ function slotWarning(day,time,dur){if(!time)return '';const s=toMin(time),e=s+(d
 /* ---------- sample data ---------- */
 function seed(){
   const D=n=>addDays(TODAY,n);
-  state={version:1,rate:10,classrooms:['Chope Cube','Lepak Lounge','Shiouk Space','Zen Zone'],locations:[...DEFAULT_LOCATIONS],courses:copyCourses(),users:JSON.parse(JSON.stringify(DEFAULT_USERS)),classNotes:{},invoiceAdj:{},
+  state={version:1,rate:10,classrooms:['Chope Cube','Lepak Lounge','Shiouk Space','Zen Zone'],locations:[...DEFAULT_LOCATIONS],courses:copyCourses(),users:JSON.parse(JSON.stringify(DEFAULT_USERS)),classNotes:{},invoiceAdj:{},royalty:defaultRoyalty(copyCourses()),
     holidays:[...PH.map(([date,name])=>({id:uid(),date,name,kind:'public'})),
       {id:uid(),date:'2026-11-21',end:'2026-12-31',name:'Year-end school holidays',kind:'school'},
       {id:uid(),date:D(17),name:'Centre maintenance day',kind:'adhoc'}],
@@ -765,7 +766,7 @@ const table=(head,rows,empty='Nothing here yet.')=>`<div class="tbl"><table><the
 const trainerOpts=(cur,blank)=>(blank?opt('',cur,blank):'')+state.trainers.filter(t=>t.active||t.id===cur).map(t=>opt(t.id,cur,t.name)).join('');
 
 /* ---------- navigation ---------- */
-const VIEWS=[['overview','Overview'],['leads','Leads Tracker'],['attendance','Attendance'],['enrollment','Student Enrollment'],['schedule','Schedule Generator'],['trainers','Trainer Hours'],['portal','Trainer Portal'],['invoices','Invoices'],['certificates','Certificates'],['setup','Settings']];
+const VIEWS=[['overview','Overview'],['leads','Leads Tracker'],['attendance','Attendance'],['enrollment','Student Enrollment'],['schedule','Schedule Generator'],['trainers','Trainer Hours'],['portal','Trainer Portal'],['invoices','Invoices'],['royalty','Royalties'],['certificates','Certificates'],['setup','Settings']];
 const modLabel=()=>'Module '+Math.max(1,VIEWS.findIndex(v=>v[0]===ui.view));
 function loginHtml(){
   const logo=`<div class="logo"><img src="${IMG.ako.src}" alt="Ako Centric, One stop Learning Hub, Singapore"></div>`;
@@ -793,7 +794,7 @@ function render(){
   app.hidden=false;lg.hidden=true;lg.innerHTML='';
   if(!canSee(ui.view))ui.view=role==='trainer'?'attendance':'overview';
   renderNav();renderFoot();
-  const fn={overview:vOverview,leads:vLeads,trainers:vTrainers,certificates:vCerts,portal:vPortal,enrollment:vEnroll,setup:vSettings,attendance:vAttendance,invoices:vInvoices,schedule:vSchedule}[ui.view]||vOverview;
+  const fn={overview:vOverview,leads:vLeads,trainers:vTrainers,certificates:vCerts,portal:vPortal,enrollment:vEnroll,setup:vSettings,attendance:vAttendance,invoices:vInvoices,royalty:vRoyalty,schedule:vSchedule}[ui.view]||vOverview;
   $('#main').innerHTML=`<div class="wrap">${fn()}</div>`;
 }
 function route(){if(!state)return render();let h=location.hash.slice(1);if(h==='holidays')h='setup';ui.view=VIEWS.some(v=>v[0]===h)?h:'overview';render();window.scrollTo(0,0)}
@@ -1044,7 +1045,7 @@ function curNav(pid,mid){ui.cur.pid=pid;ui.cur.mid=mid;if(ui.view!=='portal')loc
 /* Enrollment */
 const locOptions=cur=>{const l=[...state.locations];if(cur&&cur!=='Ad-hoc'&&!l.includes(cur))l.push(cur);l.push('Ad-hoc');return l};
 const courseOptions=(type,cur)=>{const c=[...state.courses[catKey(type)]];if(cur&&!c.includes(cur))c.push(cur);return c};
-const blankDraft=()=>({editingId:'',reg:'New',existingUser:'',conv:'No',leadId:'',parentName:'',phone:'',email:'',firstName:'',lastName:'',age:'',course:'',location:state.locations[0]||'Ad-hoc',adhocLocation:'',scheduleType:'Weekly Courses',sessions:'12',startDate:'',slotDay:'',slotTime:'',duration:'',username:'',password:DEFAULT_PW,comments:''});
+const blankDraft=()=>({fee:'',editingId:'',reg:'New',existingUser:'',conv:'No',leadId:'',parentName:'',phone:'',email:'',firstName:'',lastName:'',age:'',course:'',location:state.locations[0]||'Ad-hoc',adhocLocation:'',scheduleType:'Weekly Courses',sessions:'12',startDate:'',slotDay:'',slotTime:'',duration:'',username:'',password:DEFAULT_PW,comments:''});
 function draftFromLead(l){const parts=(l.childName||'').trim().split(/\s+/);const loc=normLoc(l.location);
   return {...blankDraft(),conv:'Yes',leadId:l.id,parentName:l.parentName,phone:l.phone,email:l.email,age:l.age,firstName:parts[0]||'',lastName:parts.slice(1).join(' '),course:'',location:state.locations.includes(loc)?loc:(state.locations[0]||'Ad-hoc'),scheduleType:/camp/i.test(l.interestedIn)?'Holiday Camp':'Weekly Courses',comments:l.comments||'',username:''}}
 function slotFields(v,weekly,bind){
@@ -1080,7 +1081,7 @@ function vEnroll(){
     <div class="field"><label for="ef-course">${catOf(catKey(d.scheduleType))[3]} *</label><select id="ef-course" data-draft="course" required>${opt('',d.course,'Choose…')}${courseOptions(d.scheduleType,d.course).map(c=>opt(c,d.course)).join('')}</select><span class="hint">Manage the list in Settings.</span></div>
     <div class="field"><label for="ef-loc">Location preference</label><select id="ef-loc" data-draft="location">${locOptions(d.location).map(o=>opt(o,d.location)).join('')}</select><span class="hint">Manage the list in Settings.</span></div>
     ${d.location==='Ad-hoc'?`<div class="field full"><label for="ef-adhocLocation">Ad-hoc location *</label><input type="text" id="ef-adhocLocation" maxlength="100" value="${esc(d.adhocLocation)}" data-draft="adhocLocation" required></div>`:''}
-    ${weekly?`<div class="field"><label for="ef-sessions">Number of sessions</label><input type="number" id="ef-sessions" min="1" max="52" value="${esc(d.sessions)}" data-draft="sessions"></div>`:`<div class="field"><span class="lbl">Length</span><span class="mini" style="padding-top:8px">${d.scheduleType==='Holiday Camp'?'5 weekdays':'1 day'}</span></div>`}<div></div>
+    ${weekly?`<div class="field"><label for="ef-sessions">Number of sessions</label><input type="number" id="ef-sessions" min="1" max="52" value="${esc(d.sessions)}" data-draft="sessions"></div>`:`<div class="field"><span class="lbl">Length</span><span class="mini" style="padding-top:8px">${d.scheduleType==='Holiday Camp'?'5 weekdays':'1 day'}</span></div>`}${weekly?'<div></div>':`<div class="field"><label for="ef-fee">Fee charged (S$)</label><input type="number" id="ef-fee" min="0" max="100000" step="0.01" value="${esc(d.fee??'')}" data-draft="fee"><span class="hint">Counts as revenue in the month the ${d.scheduleType==='Holiday Camp'?'camp':'workshop'} starts.</span></div>`}
     <div class="field"><label for="ef-start">Start date *</label><input type="date" id="ef-start" value="${esc(d.startDate)}" data-draft="startDate" required><span id="ef-hint">${startHint(d)}</span></div><div></div>
     <div class="full" style="border-top:1px solid var(--line);padding-top:12px"><h3>Time slot</h3><p class="mini" style="margin:2px 0 0">Set a day, start time or length for this student, or leave them blank and the scheduler picks the first free slot. You can change this later from the Schedule Generator.</p></div>
     ${slotFields(d,weekly,'draft')}${weekly?'<div></div>':''}
@@ -1132,6 +1133,48 @@ function vSettings(){
   <div class="card"><div class="row"><h2>Holiday calendar</h2><div class="row right">${[['all','All'],['public','Public'],['adhoc','Ad-hoc'],['school','School']].map(([k,l])=>`<button class="btn sm${f===k?' primary':''}" data-act="hol-filter" data-f="${k}">${l}</button>`).join('')}</div></div>
   <p class="sub">Singapore public holidays for 2026 and 2027 as gazetted by the Ministry of Manpower, including observed Mondays.</p>
   ${years.map(y=>`<div><div class="eyebrow" style="margin:6px 0">${y}</div>${table(['Date','Holiday','Type',''],hs.filter(h=>h.date.startsWith(y)).map(h=>`<tr class="${(h.end||h.date)<TODAY?'past':''}"><td>${h.end?`${fmtD(h.date)} – ${fmtD(h.end)}`:fmtDw(h.date)}</td><td>${esc(h.name)}</td><td>${chip(lbl[h.kind],tone[h.kind])}</td><td><button class="btn sm ghost danger" data-act="hol-remove" data-id="${h.id}">Remove</button></td></tr>`))}</div>`).join('')||'<p class="muted">No holidays of this type.</p>'}</div>`;
+}
+
+/* Franchise royalty (Resolute Robotics) */
+function defaultRoyalty(courses){const c=courses&&courses.weekly?courses:copyCourses();return {royaltyPct:9,marketingPct:2,courses:c.weekly.filter(x=>/^resolute/i.test(x)),paid:{}}}
+const roy=()=>state.royalty||(state.royalty=defaultRoyalty(state.courses));
+const isFranchise=course=>roy().courses.some(c=>norm(c)===norm(course));
+// Revenue = invoices issued (weekly courses) + camp/workshop fees in their start month, for franchise courses only.
+function royaltyLines(){
+  const out=[];
+  allInvoices().filter(i=>i.status!=='Scheduled'&&isFranchise(i.st.course)).forEach(i=>out.push({month:monthKey(i.issue),date:i.issue,st:i.st,course:i.st.course,type:'Weekly course',ref:i.no,amount:i.amount,paid:i.status==='Paid'}));
+  state.students.filter(st=>st.scheduleType!=='Weekly Courses'&&st.fee>0&&st.startDate&&isFranchise(st.course)).forEach(st=>out.push({month:monthKey(st.startDate),date:st.startDate,st,course:st.course,type:st.scheduleType==='Holiday Camp'?'Camp':'Workshop',ref:'Enrollment fee',amount:+st.fee,paid:null}));
+  return out.sort((a,b)=>a.date<b.date?-1:1);
+}
+function royaltyMonths(){
+  const r=roy(),pct=(+r.royaltyPct||0)+(+r.marketingPct||0);const by={};
+  royaltyLines().forEach(l=>{const m=(by[l.month]??={month:l.month,revenue:0,lines:0});m.revenue=round2(m.revenue+l.amount);m.lines++});
+  Object.keys(r.paid||{}).forEach(m=>{by[m]??={month:m,revenue:0,lines:0}});
+  return Object.values(by).sort((a,b)=>a.month<b.month?1:-1).map(m=>({...m,royalty:round2(m.revenue*(+r.royaltyPct||0)/100),marketing:round2(m.revenue*(+r.marketingPct||0)/100),total:round2(m.revenue*pct/100),paid:(r.paid||{})[m.month]||''}));
+}
+function royaltyCard(){
+  const r=roy();const used=t=>state.students.filter(s=>catKey(s.scheduleType)===t).map(s=>s.course);
+  const group=(k,title)=>{const names=[...new Set([...state.courses[k],...used(k)])];return `<div style="display:flex;flex-direction:column;gap:4px"><h3>${title}</h3>${names.length?`<div class="checks" style="max-height:none">${names.map(n=>`<label><input type="checkbox" name="rc" value="${esc(n)}"${isFranchise(n)?' checked':''}> ${esc(n)}</label>`).join('')}</div>`:'<span class="mini">None yet.</span>'}</div>`};
+  return `<div class="card"><h2>Resolute franchise royalty</h2><p class="sub">Royalty and marketing fees payable to Resolute Robotics, worked out on the revenue of the programmes ticked below. See the Royalties page for the monthly amounts.</p>
+  <form data-form="royalty" style="display:flex;flex-direction:column;gap:14px"><div class="form"><div class="field"><label for="ry-r">Royalty (%)</label><input type="number" id="ry-r" name="royaltyPct" min="0" max="100" step="0.1" value="${esc(r.royaltyPct)}" required></div><div class="field"><label for="ry-m">Marketing (%)</label><input type="number" id="ry-m" name="marketingPct" min="0" max="100" step="0.1" value="${esc(r.marketingPct)}" required></div>
+  <div class="full mini">Total payable: <b>${round2((+r.royaltyPct||0)+(+r.marketingPct||0))}%</b> of franchise revenue.</div></div>
+  <div class="grid2" style="grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:14px">${group('weekly','Courses')}${group('camp','Camps')}${group('workshop','Workshops')}</div>
+  <div><button class="btn primary">Save royalty settings</button></div></form></div>`;
+}
+function vRoyalty(){
+  const r=roy(),months=royaltyMonths(),pct=round2((+r.royaltyPct||0)+(+r.marketingPct||0));
+  const nowM=monthKey(TODAY);if(!ui.royMonth)ui.royMonth=(months.find(m=>m.month<=nowM)||months[0]||{month:nowM}).month;
+  const ytd=months.filter(m=>m.month.slice(0,4)===nowM.slice(0,4));const sum=k=>round2(ytd.reduce((a,m)=>a+m[k],0));
+  const owed=round2(months.filter(m=>!m.paid&&m.month<=nowM).reduce((a,m)=>a+m.total,0));
+  const lines=royaltyLines().filter(l=>l.month===ui.royMonth);
+  const rows=months.map(m=>`<tr class="${m.month===ui.royMonth?'':''}"><td><button class="linkbtn" data-act="roy-month" data-m="${m.month}">${monthLabel(m.month)}</button>${m.month>nowM?'<span class="small">Upcoming</span>':''}</td><td class="num">${m.lines}</td><td class="num">${money(m.revenue)}</td><td class="num">${money(m.royalty)}</td><td class="num">${money(m.marketing)}</td><td class="num"><b>${money(m.total)}</b></td>
+    <td>${m.paid?chip('Paid '+fmtD(m.paid),'good'):m.month>nowM?chip('Not due'):`<button class="btn sm" data-act="roy-paid" data-m="${m.month}">Mark paid</button>`}${m.paid?` <button class="btn sm ghost" data-act="roy-unpaid" data-m="${m.month}">Undo</button>`:''}</td></tr>`);
+  return header('Module 1','Royalties',`Royalty payable to Resolute Robotics: ${esc(r.royaltyPct)}% royalty + ${esc(r.marketingPct)}% marketing = ${pct}% of franchise revenue. Revenue counts weekly-course invoices once issued, and camp and workshop fees in their start month. Change the rates and programmes in Settings.`,`<button class="btn" data-act="export-royalty">Export to Excel</button><a class="btn" href="#setup">Royalty settings</a>`)+
+  `<div class="stats"><div class="stat"><span class="l">Franchise revenue ${nowM.slice(0,4)}</span><span class="v">${money(sum('revenue'))}</span></div><div class="stat"><span class="l">Royalty (${esc(r.royaltyPct)}%) ${nowM.slice(0,4)}</span><span class="v">${money(sum('royalty'))}</span></div><div class="stat"><span class="l">Marketing (${esc(r.marketingPct)}%) ${nowM.slice(0,4)}</span><span class="v">${money(sum('marketing'))}</span></div><div class="stat"><span class="l">Payable, not yet paid</span><span class="v">${money(owed)}</span><span class="mini">up to ${monthLabel(nowM)}</span></div></div>
+  ${r.courses.length?'':'<div class="notice"><b>No programmes selected.</b><span>Tick the Resolute franchise courses, camps and workshops in Settings.</span></div>'}
+  <div class="card"><h2>By month</h2>${table(['Month',['Items','num'],['Revenue','num'],[`Royalty ${esc(r.royaltyPct)}%`,'num'],[`Marketing ${esc(r.marketingPct)}%`,'num'],[`Total ${pct}%`,'num'],'Paid to Resolute'],rows,'No franchise revenue yet.')}</div>
+  <div class="card"><h2>${monthLabel(ui.royMonth)}: what's included</h2>${table(['Date','Student','Programme','Type','Reference',['Amount','num'],'Collected'],lines.map(l=>`<tr><td>${fmtD(l.date)}</td><td>${esc(stName(l.st))}</td><td>${esc(l.course)}</td><td>${l.type}</td><td class="mono">${esc(l.ref)}</td><td class="num">${money(l.amount)}</td><td>${l.paid===null?'<span class="muted">—</span>':l.paid?chip('Paid','good'):chip('Unpaid','warn')}</td></tr>`),'Nothing for this month.')}
+  <p class="mini" style="margin:0">A camp or workshop only counts when a fee is entered on its enrollment.</p></div>`;
 }
 
 /* Invoices */
@@ -1395,6 +1438,12 @@ function vAttendance(){
 function commit(msg){save();render();if(msg)toast(msg)}
 function regenFor(st){generateStudent(st);}
 const ACT={
+  'roy-month':d=>{ui.royMonth=d.m;render()},
+  'roy-paid':d=>{const r=roy();(r.paid??={})[d.m]=TODAY;commit(`${monthLabel(d.m)} royalty marked paid`)},
+  'roy-unpaid':d=>{const r=roy();delete r.paid[d.m];commit(`${monthLabel(d.m)} royalty marked unpaid`)},
+  'export-royalty':()=>{const r=roy();exportXlsx(`ako-resolute-royalty-${TODAY}.xlsx`,[
+    ['By month',royaltyMonths().map(m=>({'Month':monthLabel(m.month),'Items':m.lines,'Franchise revenue ($)':m.revenue,[`Royalty ${r.royaltyPct}% ($)`]:m.royalty,[`Marketing ${r.marketingPct}% ($)`]:m.marketing,'Total payable ($)':m.total,'Paid to Resolute':m.paid||''}))],
+    ['Revenue lines',royaltyLines().map(l=>({'Month':monthLabel(l.month),'Date':l.date,'Student':stName(l.st),'Programme':l.course,'Type':l.type,'Reference':l.ref,'Amount ($)':l.amount,'Collected':l.paid===null?'':l.paid?'Paid':'Unpaid'}))]])},
   'inv-adjust':d=>openInvAdjust(d.st),
   'cur-tab':d=>{ui.cur.tab=d.tab;render()},
   'cur-open':d=>curNav(d.pid,null),
@@ -1563,6 +1612,9 @@ const CHG={
     commit(big.length?`${big.join(', ')} ${big.length>1?'are':'is'} over 10 MB and was not added.`:`${added} file${added>1?'s':''} added to ${topic}, day ${day}`)}
 };
 const FORMS={
+  royalty:(f,fd)=>{const rp=parseFloat(fd.get('royaltyPct')),mp=parseFloat(fd.get('marketingPct'));
+    if(!(rp>=0&&rp<=100)||!(mp>=0&&mp<=100)){toast('Enter percentages between 0 and 100.');return}
+    const r=roy();r.royaltyPct=rp;r.marketingPct=mp;r.courses=fd.getAll('rc');commit(`Royalty settings saved: ${round2(rp+mp)}% on ${r.courses.length} programme${r.courses.length===1?'':'s'}`)},
   mkothers:(f,fd)=>{const host=state.sessions.find(x=>x.id===f.dataset.id);if(!host)return;const ids=fd.getAll('add');
     const space=MAX_GROUP-state.sessions.filter(x=>live(x)&&slotKey(x)===slotKey(host)).length;
     if(ids.length>space){toast(`Only ${space} place${space===1?'':'s'} left in this session.`);return}
@@ -1670,7 +1722,7 @@ const FORMS={
     if(returning&&!prev){toast('Choose the existing student.');return}
     const st=isEdit?studentById(d.editingId):{id:uid(),enrolledAt:TODAY,extra:0};
     Object.assign(st,{leadId:d.conv==='Yes'?d.leadId||null:null,parentName:d.parentName.trim(),phone:d.phone.trim(),email:d.email.trim(),firstName:d.firstName.trim(),lastName:d.lastName.trim(),age:d.age.trim(),course:d.course.trim(),location:d.location,adhocLocation:d.location==='Ad-hoc'?d.adhocLocation.trim():'',scheduleType:d.scheduleType,
-      sessions:d.scheduleType==='Weekly Courses'?Math.max(1,parseInt(d.sessions)||12):(d.scheduleType==='Holiday Camp'?5:1),startDate:d.startDate,comments:d.comments.trim(),password:d.password.trim()||DEFAULT_PW,slotDay:d.scheduleType==='Weekly Courses'?d.slotDay:'',slotTime:d.slotTime||'',duration:dur});
+      fee:d.scheduleType==='Weekly Courses'?null:(String(d.fee??'').trim()===''?null:Math.max(0,round2(+d.fee)||0)),sessions:d.scheduleType==='Weekly Courses'?Math.max(1,parseInt(d.sessions)||12):(d.scheduleType==='Holiday Camp'?5:1),startDate:d.startDate,comments:d.comments.trim(),password:d.password.trim()||DEFAULT_PW,slotDay:d.scheduleType==='Weekly Courses'?d.slotDay:'',slotTime:d.slotTime||'',duration:dur});
     if(returning){st.username=prev.username;st.password=prev.password;st.code=prev.code}
     else if(!isEdit||!st.username)st.username=makeUsername(st.firstName,st.lastName,st.id);
     if(!st.code)st.code=newCode();if(!isEdit)state.students.push(st);
